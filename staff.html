@@ -6,6 +6,7 @@
 <meta name="robots" content="noindex">
 <title>後台</title>
 <link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -14,7 +15,8 @@
       <h1>後台</h1>
       <nav class="mode-tabs" id="modeTabs" style="margin:0" hidden>
         <button class="btn btn-sm tab" data-mode="orders" aria-selected="true">訂單</button>
-        <button class="btn btn-sm tab" data-mode="accounts" aria-selected="false">帳號管理</button>
+        <button class="btn btn-sm tab" data-mode="sheet" aria-selected="false">廠商訂貨表</button>
+        <button class="btn btn-sm tab" data-mode="accounts" aria-selected="false" id="accTab" hidden>帳號管理</button>
       </nav>
     </div>
     <div class="who" id="who"></div>
@@ -38,6 +40,35 @@
       <div class="list" id="list"></div>
       <section class="panel" id="detail"></section>
     </div>
+  </div>
+
+  <!-- 廠商訂貨表 -->
+  <div id="sheetView" hidden>
+    <section class="panel">
+      <h2>匯出訂貨紀錄表給廠商</h2>
+      <p class="muted">把已發單的訂單填進廠商的「單品項訂貨紀錄」表。一個品項一張表；備註欄會帶入採購單號，廠商填回時系統靠它對應訂單，請提醒廠商不要修改備註欄。</p>
+      <div class="grid2">
+        <div class="field"><label for="exSup">廠商</label><select id="exSup"></select></div>
+        <div class="field"><label for="exSku">品項</label><select id="exSku"></select></div>
+        <div class="field"><label for="exFrom">訂購日期從</label><input type="date" id="exFrom"></div>
+        <div class="field"><label for="exTo">到</label><input type="date" id="exTo"></div>
+      </div>
+      <div class="actions">
+        <button id="exBtn" class="btn btn-primary">產生並下載</button>
+        <span id="exInfo" class="muted"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>匯入廠商填回的出貨數量</h2>
+      <p class="muted">上傳廠商填好「實際出貨數量」的訂貨紀錄表。系統會先列出比對結果，確認後才寫入。實際出貨數量空白的列會略過。</p>
+      <div class="grid2">
+        <div class="field"><label for="imFile">訂貨紀錄表（.xlsx）</label><input type="file" id="imFile" accept=".xlsx"></div>
+        <div class="field"><label for="imDate">出貨日（表上沒有出貨日欄位，統一用這天）</label><input type="date" id="imDate"></div>
+      </div>
+      <div class="actions"><button id="imReadBtn" class="btn">讀取並比對</button></div>
+      <div id="imResult"></div>
+    </section>
   </div>
 
   <!-- 帳號管理 -->
@@ -68,8 +99,8 @@
 <script>
 const $ = id => document.getElementById(id);
 const ACTIVE = ['待確認', '已叫貨', '廠商已確認'];
-const TABS = ['進行中', '待確認', '已叫貨', '廠商已確認', '已出貨', '已轉正航', '已取消', '全部'];
-const CHIP = { '待確認': 'pending', '已叫貨': 'sent', '廠商已確認': 'ok', '已出貨': 'done', '已轉正航': 'done', '已取消': 'stop' };
+const TABS = ['進行中', '待確認', '已叫貨', '廠商已確認', '已出貨', '已取消', '全部'];
+const CHIP = { '待確認': 'pending', '已叫貨': 'sent', '廠商已確認': 'ok', '已出貨': 'done', '已取消': 'stop' };
 const S = { me: null, orders: [], suppliers: [], products: [], testMode: false, tab: '進行中', selected: null, dirty: false, mode: 'orders', acc: null, newRole: '客戶' };
 
 App.header();
@@ -80,7 +111,8 @@ async function init() {
     const d = await App.call('a_init');
     Object.assign(S, d);
     $('loading').hidden = true;
-    $('modeTabs').hidden = !S.me.isAdmin;
+    $('modeTabs').hidden = false;
+    $('accTab').hidden = !S.me.isAdmin;
     $('testBanner').hidden = !S.testMode;
     if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
     setMode(S.mode, true);
@@ -99,7 +131,10 @@ function setMode(mode, force) {
   document.querySelectorAll('#modeTabs [data-mode]').forEach(b => b.setAttribute('aria-selected', b.dataset.mode === mode));
   $('ordersView').hidden = mode !== 'orders';
   $('accountsView').hidden = mode !== 'accounts';
-  if (mode === 'orders') renderAll(); else loadAccounts();
+  $('sheetView').hidden = mode !== 'sheet';
+  if (mode === 'orders') renderAll();
+  else if (mode === 'sheet') renderSheetForm();
+  else loadAccounts();
 }
 $('modeTabs').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
 
@@ -123,6 +158,7 @@ function flags(o) {
   if (o.sentVersion === 0) return '尚未發單';
   if (o.version > o.sentVersion) return `第${o.version}版尚未發單`;
   if (o.confirmedVersion < o.sentVersion) return '等待廠商確認';
+  if (o.status === '廠商已確認') return '等待廠商出貨';
   return '';
 }
 
@@ -184,6 +220,7 @@ function renderDetail() {
   if (editable && o.sentVersion === 0) notice += '<div class="banner banner-info">還沒發單。指定廠商、確認內容後按「發單」。</div>';
   else if (editable && unsent) notice += `<div class="banner banner-warn">第${o.version}版尚未發單，廠商目前看到的是第${o.sentVersion}版。</div>`;
   else if (o.status === '已叫貨' && o.confirmedVersion < o.sentVersion && !hasIssue(o)) notice += '<div class="banner banner-info">等待廠商確認接單（LINE 群組按鈕或廠商頁面都可以確認）。</div>';
+  else if (o.status === '廠商已確認') notice += '<div class="banner banner-info">廠商已接單，等待廠商在廠商頁回報出貨。</div>';
 
   $('detail').innerHTML = `
     <div class="ticket-head">
@@ -197,11 +234,11 @@ function renderDetail() {
       ${fact('目前版本', `第${o.version}版`)}
       ${fact('已發單', o.sentVersion ? `第${o.sentVersion}版` : '尚未發單')}
       ${fact('廠商確認', o.confirmedVersion ? `第${o.confirmedVersion}版` : '尚未確認')}
-      ${fact('正航單號', o.erpNo || '尚未轉入')}
       ${fact('建立時間', o.createdAt)}
     </dl>
     ${notice}
     ${editable ? editForm(o) : readonly(o)}
+    ${shipBlock(o.ship)}
     <div class="actions">${actionButtons(o)}</div>
     <h3>處理紀錄</h3>
     <ul class="log" id="log"><li class="muted">載入中…</li></ul>`;
@@ -209,6 +246,17 @@ function renderDetail() {
   if (editable) bindEditForm(o);
   bindActions(o);
   loadLog(o.id);
+}
+
+function shipBlock(ship) {
+  if (!ship) return '';
+  return `
+    <h3>廠商出貨回報</h3>
+    <dl class="meta">${fact('出貨日', ship.date)}${fact('回報人', ship.by)}${fact('回報時間', ship.at)}</dl>
+    ${ship.partial ? '<p class="note">部分品項尚未回報出貨。</p>' : ''}
+    <ul class="items">${ship.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${l.qty === null || l.qty === undefined
+      ? `訂 ${l.ordered}，尚未回報` : l.qty !== l.ordered ? `訂 ${l.ordered}，<strong>實出 ${l.qty}</strong>` : `${l.qty}`} ${App.esc(l.unit)}</span></li>`).join('')}</ul>
+    ${ship.note ? `<p class="note">備註：${App.esc(ship.note)}</p>` : ''}`;
 }
 
 function readonly(o) {
@@ -302,8 +350,7 @@ function actionButtons(o) {
   const b = [];
   if (editable) b.push(`<button id="sendBtn" class="btn btn-primary" ${unsent ? '' : 'disabled'}>${o.sentVersion ? '發送變更' : '發單'}${how}</button>`);
   if (S.testMode && o.status === '已叫貨' && o.confirmedVersion < o.sentVersion && !unsent) b.push('<button id="simBtn" class="btn">模擬廠商確認</button>');
-  if ((o.status === '已叫貨' || o.status === '廠商已確認') && !unsent) b.push('<button id="shipBtn" class="btn">標記已出貨</button>');
-  if (o.status === '已出貨') b.push('<input id="erpNo" class="erp-input" placeholder="正航單號" aria-label="正航單號"><button id="erpBtn" class="btn">標記已轉正航</button>');
+  if ((o.status === '已叫貨' || o.status === '廠商已確認') && !unsent) b.push('<button id="shipBtn" class="btn">代廠商標記已出貨</button>');
   if (editable) b.push('<button id="cancelBtn" class="btn btn-danger">取消訂單</button>');
   return b.join('');
 }
@@ -320,10 +367,10 @@ function bindActions(o) {
   on('simBtn', btn => doAction(btn, '處理中…', () => App.call('a_simconfirm', { id: o.id, version: o.sentVersion }), d => d.message));
   on('clearIssueBtn', btn => doAction(btn, '處理中…', () => App.call('a_clearIssue', { id: o.id }), () => '已標記處理'));
   on('shipBtn', btn => {
-    if (o.confirmedVersion < o.sentVersion && !confirm('廠商還沒確認最新版本，仍要標記已出貨？')) return;
+    const warn = o.confirmedVersion < o.sentVersion ? '廠商還沒確認最新版本。' : '';
+    if (!confirm(`${warn}一般由廠商在廠商頁回報出貨。確定要由你代為標記已出貨？`)) return;
     doAction(btn, '處理中…', () => App.call('a_status', { id: o.id, status: '已出貨' }), () => '已標記出貨');
   });
-  on('erpBtn', btn => doAction(btn, '處理中…', () => App.call('a_status', { id: o.id, status: '已轉正航', erpNo: $('erpNo').value }), () => '已標記轉入正航'));
   on('cancelBtn', btn => {
     const msg = o.sentVersion ? `確定取消 ${o.id}？系統會通知廠商這張採購單已取消。` : `確定取消 ${o.id}？`;
     if (!confirm(msg)) return;
@@ -511,6 +558,133 @@ function renderNewAcc() {
     } catch (err) { App.toast(err.message, true); }
   });
   $('nUser').focus();
+}
+
+/* ───── 廠商訂貨紀錄表 ───── */
+const TEMPLATE_URL = 'order-record-template.xlsx';
+const SHEET_NAME = '單品項訂貨紀錄';
+const FIRST_ROW = 8, LAST_ROW = 107;
+const UNITS = ['箱', '件', '瓶', '包', '公斤', '公升', '桶', '組', '其他'];
+
+function renderSheetForm() {
+  const keep = id => $(id).value;
+  const sup = keep('exSup'), sku = keep('exSku');
+  $('exSup').innerHTML = S.suppliers.map(s => `<option value="${App.esc(s.code)}" ${s.code === sup ? 'selected' : ''}>${App.esc(s.name)}</option>`).join('');
+  $('exSku').innerHTML = S.products.map(p => `<option value="${App.esc(p.sku)}" ${p.sku === sku ? 'selected' : ''}>${App.esc(p.name)}</option>`).join('');
+  if (!$('exFrom').value) $('exFrom').value = App.today(0).slice(0, 8) + '01';
+  if (!$('exTo').value) $('exTo').value = App.today(0);
+  if (!$('imDate').value) $('imDate').value = App.today(0);
+}
+
+const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+
+// ExcelJS 讀入時把資料驗證拆成逐格，寫出前合併回原本的欄範圍，避免重疊的驗證規則
+function normalizeValidations(ws) {
+  const model = ws.dataValidations.model;
+  const groups = {};
+  Object.keys(model).forEach(addr => {
+    const m = /^([A-Z]+)(\d+)$/.exec(addr);
+    if (!m) { groups[addr] = { range: addr, rule: model[addr] }; return; }
+    const key = m[1] + '|' + JSON.stringify(model[addr]);
+    const g = groups[key] || (groups[key] = { col: m[1], min: Infinity, max: 0, rule: model[addr] });
+    g.min = Math.min(g.min, Number(m[2])); g.max = Math.max(g.max, Number(m[2]));
+  });
+  const out = {};
+  Object.values(groups).forEach(g => { out[g.range || `${g.col}${g.min}:${g.col}${g.max}`] = g.rule; });
+  ws.dataValidations.model = out;
+}
+
+$('exBtn').addEventListener('click', () => App.busy($('exBtn'), '產生中…', async () => {
+  try {
+    if (!window.ExcelJS) throw new Error('Excel 元件載入失敗，請重新整理頁面');
+    const d = await App.call('a_exportRows', { supplierCode: $('exSup').value, sku: $('exSku').value, from: $('exFrom').value, to: $('exTo').value });
+    if (!d.rows.length) { $('exInfo').textContent = '這段期間沒有這個品項的已發單訂單。'; return; }
+    if (d.rows.length > LAST_ROW - FIRST_ROW + 1) throw new Error(`共 ${d.rows.length} 筆，超過表格的 100 列，請縮短期間分批匯出`);
+
+    const res = await fetch(TEMPLATE_URL, { cache: 'no-store' });
+    if (!res.ok) throw new Error('找不到範本檔 order-record-template.xlsx，請確認已上傳到 GitHub');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await res.arrayBuffer());
+    const ws = wb.getWorksheet(SHEET_NAME);
+    if (!ws) throw new Error(`範本裡沒有「${SHEET_NAME}」工作表`);
+
+    ws.getCell('B3').value = d.supplierName;
+    ws.getCell('E3').value = d.product.name;
+    ws.getCell('H3').value = d.product.unit;
+    for (let r = FIRST_ROW; r <= LAST_ROW; r++) ['B', 'C', 'D', 'E', 'F', 'G', 'H'].forEach(c => { ws.getCell(c + r).value = null; });
+    d.rows.forEach((x, i) => {
+      const r = FIRST_ROW + i;
+      ws.getCell('B' + r).value = toDate(x.orderDate);
+      ws.getCell('C' + r).value = x.qty;
+      ws.getCell('D' + r).value = UNITS.includes(x.unit) ? x.unit : '其他';
+      ws.getCell('E' + r).value = toDate(x.deliveryDate);
+      ws.getCell('F' + r).value = `${x.poNo}（第${x.version}版）收貨：${x.customerName}，${x.address}` + (x.note ? `；${x.note}` : '') + (UNITS.includes(x.unit) ? '' : `；單位：${x.unit}`);
+      ws.getCell('G' + r).value = x.confirm;
+      ws.getCell('H' + r).value = x.shippedQty === '' ? null : x.shippedQty;
+    });
+    normalizeValidations(ws);
+
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    a.download = `${d.supplierName}_${d.product.name}_訂貨紀錄.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    $('exInfo').textContent = `已匯出 ${d.rows.length} 筆。`;
+  } catch (e) { App.toast(e.message, true); }
+}));
+
+let importItems = null;
+
+$('imReadBtn').addEventListener('click', () => App.busy($('imReadBtn'), '讀取中…', async () => {
+  try {
+    const f = $('imFile').files[0];
+    if (!f) throw new Error('請先選擇檔案');
+    if (!window.ExcelJS) throw new Error('Excel 元件載入失敗，請重新整理頁面');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await f.arrayBuffer());
+    const ws = wb.getWorksheet(SHEET_NAME) || wb.worksheets[0];
+    const productName = ws.getCell('E3').text.trim();
+    const prod = S.products.find(p => p.name === productName);
+    const items = [];
+    let blank = 0;
+    for (let r = FIRST_ROW; r <= ws.rowCount; r++) {
+      const note = ws.getCell('F' + r).text;
+      const m = /(PO-\d{6}-\d{3})(?:（第(\d+)版）)?/.exec(note);
+      if (!m) continue;
+      const raw = ws.getCell('H' + r).value;
+      const val = raw && typeof raw === 'object' && 'result' in raw ? raw.result : raw;
+      if (val === null || val === undefined || String(val).trim() === '') { blank++; continue; }
+      items.push({ row: r, poNo: m[1], version: m[2] ? Number(m[2]) : 0, sku: prod ? prod.sku : '', productName, qty: String(val).trim(), mark: ws.getCell('G' + r).text.trim() });
+    }
+    if (!items.length) throw new Error(blank ? '表上的列都還沒填實際出貨數量' : '表上找不到帶有採購單號的列（備註欄要保留 PO 開頭的單號）');
+    const d = await App.call('a_importShip', { dryRun: true, shipDate: $('imDate').value, items });
+    importItems = items;
+    showImport(d.results, true, productName, blank);
+  } catch (e) { App.toast(e.message, true); }
+}));
+
+function showImport(results, preview, productName, blank) {
+  const okN = results.filter(r => r.ok && !r.skip).length;
+  $('imResult').innerHTML = `
+    <h3>${preview ? '比對結果' : '已寫入'}${productName ? `：${App.esc(productName)}` : ''}</h3>
+    ${blank ? `<p class="muted">另有 ${blank} 列尚未填實際出貨數量，已略過。</p>` : ''}
+    <ul class="log">${results.map(r => `
+      <li><span class="num">第 ${r.row} 列</span>　<strong>${App.esc(r.poNo)}</strong>　${App.esc(r.customerName || '')}
+        ${r.name ? `<span class="muted">${App.esc(r.name)}，實出 ${App.esc(r.qty)} ${App.esc(r.unit || '')}</span>` : ''}
+        <pre style="color:${r.ok ? (r.skip ? 'var(--muted)' : 'var(--ok)') : 'var(--stop)'}">${App.esc(r.msg)}</pre></li>`).join('')}</ul>
+    ${preview && okN ? `<div class="actions"><button id="imWriteBtn" class="btn btn-primary">寫回系統（${okN} 筆）</button></div>` : ''}
+    ${preview && !okN ? '<p class="muted">沒有需要寫入的資料。</p>' : ''}`;
+  const w = $('imWriteBtn');
+  if (w) w.addEventListener('click', () => App.busy(w, '寫入中…', async () => {
+    try {
+      const d = await App.call('a_importShip', { dryRun: false, shipDate: $('imDate').value, items: importItems });
+      S.orders = d.orders;
+      importItems = null;
+      showImport(d.results, false, productName, 0);
+      App.toast('已寫回系統');
+    } catch (e) { App.toast(e.message, true); }
+  }));
 }
 
 window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });

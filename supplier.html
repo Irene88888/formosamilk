@@ -36,13 +36,14 @@
 const $ = id => document.getElementById(id);
 App.header();
 
-const TABS = ['待確認接單', '進行中', '全部'];
+const TABS = ['待確認接單', '待出貨', '已出貨', '全部'];
 const CHIP = { '待確認接單': 'pending', '已回報問題': 'pending', '已確認接單': 'ok', '已出貨': 'done', '已取消': 'stop' };
-const S = { orders: [], tab: '待確認接單', issueOpen: null };
+const S = { orders: [], tab: '待確認接單', issueOpen: null, shipOpen: null };
 
 const inTab = (o, t) => t === '全部' ? true
   : t === '待確認接單' ? (o.status === '待確認接單' || o.status === '已回報問題')
-  : (o.status === '待確認接單' || o.status === '已回報問題' || o.status === '已確認接單');
+  : t === '待出貨' ? o.status === '已確認接單'
+  : o.status === '已出貨';
 
 async function load() {
   try {
@@ -66,7 +67,8 @@ function render() {
 
   const list = S.orders.filter(o => inTab(o, S.tab));
   if (!list.length) {
-    $('orders').innerHTML = `<div class="empty">${S.tab === '待確認接單' ? '目前沒有需要確認的採購單。' : '這個分類沒有採購單。'}</div>`;
+    const msg = { '待確認接單': '目前沒有需要確認的採購單。', '待出貨': '目前沒有待出貨的採購單。' }[S.tab] || '這個分類沒有採購單。';
+    $('orders').innerHTML = `<div class="empty">${msg}</div>`;
     return;
   }
   $('orders').innerHTML = list.map(o => {
@@ -92,6 +94,9 @@ function render() {
       ${o.note ? `<p class="note">備註：${App.esc(o.note)}</p>` : ''}
       ${o.issue ? `<div class="issue">你回報的問題：${App.esc(o.issue)}<br>我們處理後會更新採購單，或直接與你聯絡。</div>` : ''}
       ${o.status === '已取消' ? '<p class="note">此採購單已取消，請勿出貨。</p>' : ''}
+      ${o.ship ? shipInfo(o.ship) : ''}
+      ${o.status === '已確認接單' ? (S.shipOpen === o.id ? shipForm(o) : `
+        <div class="actions"><button class="btn btn-primary" data-ship="${App.esc(o.id)}">回報已出貨</button></div>`) : ''}
       ${waiting ? `
         <div class="actions">
           <button class="btn btn-primary" data-confirm="${App.esc(o.id)}">確認接單（第${o.version}版）</button>
@@ -111,9 +116,48 @@ function render() {
   if (S.issueOpen && $('issueText')) $('issueText').focus();
 }
 
+function shipInfo(ship) {
+  const has = l => l.qty !== null && l.qty !== undefined;
+  const diff = ship.lines.filter(l => !has(l) || l.qty !== l.ordered);
+  return `<div class="banner banner-info" style="margin-top:10px">
+    ${ship.partial ? '部分品項已登記出貨' : `已於 <span class="num">${App.esc(ship.date)}</span> 回報出貨`}（${App.esc(ship.by)}）
+    ${diff.length ? '<br>' + diff.map(l => has(l) ? `${App.esc(l.name)}：訂 ${l.ordered}，實出 ${l.qty} ${App.esc(l.unit)}`
+      : `${App.esc(l.name)}：尚未回報`).join('<br>') : '，數量與採購單相同'}
+    ${ship.note ? `<br>備註：${App.esc(ship.note)}` : ''}</div>`;
+}
+
+function shipForm(o) {
+  return `
+    <div class="panel" style="background:var(--bg);margin:12px 0 0">
+      <h2>回報出貨</h2>
+      <p class="muted">實出數量和採購單不同時請修改，例如實際磅重。</p>
+      <div class="field">
+        <label for="shipDate">出貨日</label>
+        <input type="date" id="shipDate" value="${App.today(0)}">
+      </div>
+      <fieldset class="field">
+        <legend>實出數量</legend>
+        ${o.lines.map(l => `
+          <div class="line-row" style="grid-template-columns:1fr 110px 44px">
+            <label for="sq-${App.esc(l.sku)}">${App.esc(l.name)}<span class="muted">（訂 ${l.qty}）</span></label>
+            <input type="number" id="sq-${App.esc(l.sku)}" data-sku="${App.esc(l.sku)}" inputmode="decimal" min="0" step="any" value="${l.qty}">
+            <span class="unit">${App.esc(l.unit)}</span>
+          </div>`).join('')}
+      </fieldset>
+      <div class="field">
+        <label for="shipNote">備註（選填，例如車號、物流單號）</label>
+        <textarea id="shipNote" rows="2"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" data-ship-send="${App.esc(o.id)}">確認回報出貨</button>
+        <button class="btn btn-ghost" data-ship-cancel="1">取消</button>
+      </div>
+    </div>`;
+}
+
 $('tabs').addEventListener('click', e => {
   const t = e.target.closest('[data-tab]');
-  if (t) { S.tab = t.dataset.tab; S.issueOpen = null; render(); }
+  if (t) { S.tab = t.dataset.tab; S.issueOpen = null; S.shipOpen = null; render(); }
 });
 
 $('orders').addEventListener('click', async e => {
@@ -126,6 +170,22 @@ $('orders').addEventListener('click', async e => {
       App.toast(d.message);
       await load();
     } catch (err) { App.toast(err.message, true); await load(); }
+  } else if (b.dataset.ship) {
+    S.shipOpen = b.dataset.ship; S.issueOpen = null; render();
+    if ($('shipDate')) $('shipDate').focus();
+  } else if (b.dataset.shipCancel) {
+    S.shipOpen = null; render();
+  } else if (b.dataset.shipSend) {
+    const o = S.orders.find(x => x.id === b.dataset.shipSend);
+    const lines = [...document.querySelectorAll('[data-sku]')].map(i => ({ sku: i.dataset.sku, qty: i.value }));
+    if (lines.some(l => l.qty === '' || !(Number(l.qty) >= 0))) return App.toast('請填寫每個品項的實出數量', true);
+    if (!confirm(`確定回報 ${o.poNo} 已出貨？回報後無法修改，如有錯誤請聯絡我們。`)) return;
+    try {
+      await App.busy(b, '送出中…', () => App.call('s_ship', { id: o.id, version: o.version, shipDate: $('shipDate').value, lines, note: $('shipNote').value }));
+      S.shipOpen = null;
+      App.toast('已回報出貨');
+      await load();
+    } catch (err) { App.toast(err.message, true); }
   } else if (b.dataset.issue) {
     S.issueOpen = b.dataset.issue; render();
   } else if (b.dataset.issueCancel) {
