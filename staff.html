@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>後台</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="shell shell-wide row">
+    <div class="row" style="justify-content:flex-start">
+      <h1>後台</h1>
+      <nav class="mode-tabs" id="modeTabs" style="margin:0" hidden>
+        <button class="btn btn-sm tab" data-mode="orders" aria-selected="true">訂單</button>
+        <button class="btn btn-sm tab" data-mode="accounts" aria-selected="false">帳號管理</button>
+      </nav>
+    </div>
+    <div class="who" id="who"></div>
+  </div>
+</header>
+
+<main class="shell shell-wide">
+  <div id="error" class="banner banner-error" hidden></div>
+  <p id="loading" class="muted">載入中…</p>
+
+  <!-- 訂單 -->
+  <div id="ordersView" hidden>
+    <div id="testBanner" class="banner banner-warn" hidden>
+      測試模式：尚未設定 LINE_TOKEN。發單時 LINE 訊息只會寫進「紀錄」工作表，不會真的推播；可用「模擬廠商確認」測試後續流程，或登入廠商帳號從網頁確認。
+    </div>
+    <div class="section-head">
+      <nav class="tabs" id="tabs" role="tablist" aria-label="依狀態篩選" style="margin:0"></nav>
+      <button id="refreshBtn" class="btn btn-ghost btn-sm">重新整理</button>
+    </div>
+    <div class="split">
+      <div class="list" id="list"></div>
+      <section class="panel" id="detail"></section>
+    </div>
+  </div>
+
+  <!-- 帳號管理 -->
+  <div id="accountsView" hidden>
+    <div class="split" style="grid-template-columns:none">
+      <section class="panel">
+        <div class="section-head">
+          <h2>帳號</h2>
+          <button id="newAccBtn" class="btn btn-primary btn-sm">新增帳號</button>
+        </div>
+        <div id="newAccPanel" hidden></div>
+        <div id="secretPanel" hidden></div>
+        <ul class="acc-list" id="accList"></ul>
+      </section>
+      <section class="panel">
+        <h2>廠商的 LINE 群組</h2>
+        <p class="muted">把 Bot 拉進廠商群組後，群組會出現在下拉選單。選好後按「儲存」，之後發單就會推播到那個群組。</p>
+        <div id="groupRows"></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const ACTIVE = ['待確認', '已叫貨', '廠商已確認'];
+const TABS = ['進行中', '待確認', '已叫貨', '廠商已確認', '已出貨', '已轉正航', '已取消', '全部'];
+const CHIP = { '待確認': 'pending', '已叫貨': 'sent', '廠商已確認': 'ok', '已出貨': 'done', '已轉正航': 'done', '已取消': 'stop' };
+const S = { me: null, orders: [], suppliers: [], products: [], testMode: false, tab: '進行中', selected: null, dirty: false, mode: 'orders', acc: null, newRole: '客戶' };
+
+App.header();
+
+/* ───── 載入與模式切換 ───── */
+async function init() {
+  try {
+    const d = await App.call('a_init');
+    Object.assign(S, d);
+    $('loading').hidden = true;
+    $('modeTabs').hidden = !S.me.isAdmin;
+    $('testBanner').hidden = !S.testMode;
+    if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
+    setMode(S.mode, true);
+  } catch (e) {
+    $('loading').hidden = true;
+    $('error').textContent = e.message;
+    $('error').hidden = false;
+  }
+}
+
+function setMode(mode, force) {
+  if (!force && mode === S.mode) return;
+  if (S.dirty && !confirm('有未儲存的修改，確定要離開？')) return;
+  S.dirty = false;
+  S.mode = mode;
+  document.querySelectorAll('#modeTabs [data-mode]').forEach(b => b.setAttribute('aria-selected', b.dataset.mode === mode));
+  $('ordersView').hidden = mode !== 'orders';
+  $('accountsView').hidden = mode !== 'accounts';
+  if (mode === 'orders') renderAll(); else loadAccounts();
+}
+$('modeTabs').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
+
+$('refreshBtn').addEventListener('click', async () => {
+  if (S.dirty && !confirm('有未儲存的修改，確定要重新整理？')) return;
+  S.dirty = false;
+  await App.busy($('refreshBtn'), '載入中…', init);
+  App.toast('已更新');
+});
+
+/* ───── 訂單：工具 ───── */
+const cur = () => S.orders.find(o => o.id === S.selected);
+const supName = code => (S.suppliers.find(s => s.code === code) || {}).name || code || '';
+const unitOf = sku => (S.products.find(p => p.sku === sku) || {}).unit || '';
+const inTab = (o, t) => t === '全部' ? true : t === '進行中' ? ACTIVE.includes(o.status) : o.status === t;
+const hasIssue = o => o.issue && o.issueVersion === o.sentVersion && ACTIVE.includes(o.status);
+
+function flags(o) {
+  if (!ACTIVE.includes(o.status)) return '';
+  if (hasIssue(o)) return '廠商回報問題';
+  if (o.sentVersion === 0) return '尚未發單';
+  if (o.version > o.sentVersion) return `第${o.version}版尚未發單`;
+  if (o.confirmedVersion < o.sentVersion) return '等待廠商確認';
+  return '';
+}
+
+function replaceOrder(o) {
+  const i = S.orders.findIndex(x => x.id === o.id);
+  if (i >= 0) S.orders[i] = o; else S.orders.unshift(o);
+}
+
+/* ───── 訂單：列表 ───── */
+function renderAll() { renderTabs(); renderList(); renderDetail(); }
+
+function renderTabs() {
+  $('tabs').innerHTML = TABS.map(t => {
+    const n = S.orders.filter(o => inTab(o, t)).length;
+    return `<button class="btn btn-sm tab" role="tab" aria-selected="${t === S.tab}" data-tab="${t}">${t} <span class="num">${n}</span></button>`;
+  }).join('');
+}
+$('tabs').addEventListener('click', e => {
+  const t = e.target.closest('[data-tab]');
+  if (!t) return;
+  S.tab = t.dataset.tab;
+  renderTabs(); renderList();
+});
+
+function renderList() {
+  const list = S.orders.filter(o => inTab(o, S.tab));
+  if (!list.length) { $('list').innerHTML = '<div class="empty">這個分類沒有訂單</div>'; return; }
+  $('list').innerHTML = list.map(o => {
+    const f = flags(o);
+    return `<button class="list-item" data-id="${App.esc(o.id)}" aria-current="${o.id === S.selected}">
+      <span class="row"><strong>${App.esc(o.id)}</strong><span class="chip chip-${CHIP[o.status]}">${App.esc(o.status)}</span></span>
+      <span class="muted">${App.esc(o.customerName)}，交期 <span class="num">${App.esc(o.deliveryDate)}</span></span>
+      ${f ? `<span class="flag">${App.esc(f)}</span>` : ''}
+    </button>`;
+  }).join('');
+}
+$('list').addEventListener('click', e => {
+  const b = e.target.closest('[data-id]');
+  if (!b || b.dataset.id === S.selected) return;
+  if (S.dirty && !confirm('有未儲存的修改，確定要切換訂單？')) return;
+  S.selected = b.dataset.id;
+  S.dirty = false;
+  renderList(); renderDetail();
+  if (window.innerWidth < 900) $('detail').scrollIntoView({ behavior: 'smooth' });
+});
+
+/* ───── 訂單：明細 ───── */
+const fact = (label, value) => `<div><dt>${label}</dt><dd>${App.esc(value)}</dd></div>`;
+
+function renderDetail() {
+  const o = cur();
+  if (!o) { $('detail').innerHTML = '<div class="empty">從列表選一張訂單</div>'; return; }
+  const editable = ACTIVE.includes(o.status);
+  const unsent = o.version > o.sentVersion;
+
+  let notice = '';
+  if (hasIssue(o)) notice = `<div class="issue"><strong>廠商回報（第${o.issueVersion}版）：</strong>${App.esc(o.issue)}
+      <div class="actions"><button id="clearIssueBtn" class="btn btn-sm">標記已處理</button></div></div>`;
+  if (editable && o.sentVersion === 0) notice += '<div class="banner banner-info">還沒發單。指定廠商、確認內容後按「發單」。</div>';
+  else if (editable && unsent) notice += `<div class="banner banner-warn">第${o.version}版尚未發單，廠商目前看到的是第${o.sentVersion}版。</div>`;
+  else if (o.status === '已叫貨' && o.confirmedVersion < o.sentVersion && !hasIssue(o)) notice += '<div class="banner banner-info">等待廠商確認接單（LINE 群組按鈕或廠商頁面都可以確認）。</div>';
+
+  $('detail').innerHTML = `
+    <div class="ticket-head">
+      <span class="ticket-no">${App.esc(o.id)}</span>
+      <span class="chip chip-${CHIP[o.status]}">${App.esc(o.status)}</span>
+    </div>
+    <dl class="meta">
+      ${fact('客戶', o.customerName)}
+      ${fact('採購單號', o.poNo)}
+      ${fact('批號', o.lotNo)}
+      ${fact('目前版本', `第${o.version}版`)}
+      ${fact('已發單', o.sentVersion ? `第${o.sentVersion}版` : '尚未發單')}
+      ${fact('廠商確認', o.confirmedVersion ? `第${o.confirmedVersion}版` : '尚未確認')}
+      ${fact('正航單號', o.erpNo || '尚未轉入')}
+      ${fact('建立時間', o.createdAt)}
+    </dl>
+    ${notice}
+    ${editable ? editForm(o) : readonly(o)}
+    <div class="actions">${actionButtons(o)}</div>
+    <h3>處理紀錄</h3>
+    <ul class="log" id="log"><li class="muted">載入中…</li></ul>`;
+
+  if (editable) bindEditForm(o);
+  bindActions(o);
+  loadLog(o.id);
+}
+
+function readonly(o) {
+  return `
+    <dl class="meta">${fact('廠商', supName(o.supplierCode) || '未指定')}${fact('交期', o.deliveryDate)}${fact('送貨地址', o.address)}</dl>
+    <ul class="items">${o.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${l.qty} ${App.esc(l.unit)}${l.price !== '' ? `，單價 ${l.price}` : ''}</span></li>`).join('')}</ul>
+    ${o.note ? `<p class="note">備註：${App.esc(o.note)}</p>` : ''}`;
+}
+
+function editForm(o) {
+  const locked = o.sentVersion > 0;
+  return `
+    <div class="grid2">
+      <div class="field">
+        <label for="dSup">廠商${locked ? '（已發單，不能更換）' : ''}</label>
+        <select id="dSup" ${locked ? 'disabled' : ''}>
+          <option value="">選擇廠商</option>
+          ${S.suppliers.map(s => `<option value="${App.esc(s.code)}" ${s.code === o.supplierCode ? 'selected' : ''}>${App.esc(s.name)}${s.hasGroup ? '' : '（未設 LINE 群組）'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label for="dDate">交期</label>
+        <input type="date" id="dDate" value="${App.esc(o.deliveryDate)}">
+      </div>
+    </div>
+    <div class="field">
+      <label for="dAddr">送貨地址</label>
+      <input id="dAddr" value="${App.esc(o.address)}">
+    </div>
+    <fieldset class="field">
+      <legend>品項</legend>
+      <div class="line-row with-price line-head"><span>品項</span><span>數量</span><span>單位</span><span>採購單價</span><span></span></div>
+      <div id="dLines"></div>
+      <button type="button" id="dAdd" class="btn btn-ghost btn-sm">加一個品項</button>
+    </fieldset>
+    <div class="field">
+      <label for="dNote">備註（會出現在給廠商的訊息上）</label>
+      <textarea id="dNote" rows="2">${App.esc(o.note)}</textarea>
+    </div>
+    <div class="actions">
+      <button id="saveBtn" class="btn">儲存修改</button>
+      <span id="dirtyHint" class="muted" hidden>有未儲存的修改</span>
+    </div>`;
+}
+
+function lineRow(l = {}) {
+  const row = document.createElement('div');
+  row.className = 'line-row with-price';
+  row.innerHTML = `
+    <select aria-label="品項"><option value="">選擇品項</option>${S.products.map(p =>
+      `<option value="${App.esc(p.sku)}" ${p.sku === l.sku ? 'selected' : ''}>${App.esc(p.name)}</option>`).join('')}</select>
+    <input type="number" class="qty" inputmode="decimal" min="0" step="any" aria-label="數量" value="${l.qty ?? ''}">
+    <span class="unit">${App.esc(unitOf(l.sku))}</span>
+    <input type="number" class="price" inputmode="decimal" min="0" step="any" aria-label="採購單價" placeholder="單價" value="${l.price ?? ''}">
+    <button type="button" class="btn btn-ghost btn-sm" aria-label="移除這個品項">移除</button>`;
+  row.querySelector('select').addEventListener('change', e => { row.querySelector('.unit').textContent = unitOf(e.target.value); });
+  row.querySelector('button').addEventListener('click', () => { row.remove(); markDirty(); });
+  return row;
+}
+
+function bindEditForm(o) {
+  const box = $('dLines');
+  o.lines.forEach(l => box.appendChild(lineRow(l)));
+  $('dAdd').addEventListener('click', () => { box.appendChild(lineRow()); markDirty(); });
+  ['dSup', 'dDate', 'dAddr', 'dNote'].forEach(id => $(id).addEventListener('input', markDirty));
+  box.addEventListener('input', markDirty);
+  box.addEventListener('change', markDirty);
+  $('saveBtn').addEventListener('click', () => doAction($('saveBtn'), '儲存中…', () => App.call('a_save', {
+    id: o.id, version: o.version,
+    supplierCode: $('dSup').value,
+    deliveryDate: $('dDate').value,
+    address: $('dAddr').value.trim(),
+    note: $('dNote').value.trim(),
+    lines: [...box.children].map(r => ({
+      sku: r.querySelector('select').value, qty: r.querySelector('.qty').value, price: r.querySelector('.price').value,
+    })).filter(l => l.sku || l.qty),
+  }), d => d.unchanged ? '內容沒有變更' : '修改已儲存'));
+}
+
+function markDirty() {
+  S.dirty = true;
+  if ($('dirtyHint')) $('dirtyHint').hidden = false;
+  const send = $('sendBtn');
+  if (send) { send.disabled = true; send.title = '請先儲存修改'; }
+}
+
+function actionButtons(o) {
+  const editable = ACTIVE.includes(o.status);
+  const unsent = o.version > o.sentVersion;
+  const how = S.testMode ? '（測試模式）' : '並推播 LINE';
+  const b = [];
+  if (editable) b.push(`<button id="sendBtn" class="btn btn-primary" ${unsent ? '' : 'disabled'}>${o.sentVersion ? '發送變更' : '發單'}${how}</button>`);
+  if (S.testMode && o.status === '已叫貨' && o.confirmedVersion < o.sentVersion && !unsent) b.push('<button id="simBtn" class="btn">模擬廠商確認</button>');
+  if ((o.status === '已叫貨' || o.status === '廠商已確認') && !unsent) b.push('<button id="shipBtn" class="btn">標記已出貨</button>');
+  if (o.status === '已出貨') b.push('<input id="erpNo" class="erp-input" placeholder="正航單號" aria-label="正航單號"><button id="erpBtn" class="btn">標記已轉正航</button>');
+  if (editable) b.push('<button id="cancelBtn" class="btn btn-danger">取消訂單</button>');
+  return b.join('');
+}
+
+function bindActions(o) {
+  const on = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', () => fn(el)); };
+  on('sendBtn', btn => {
+    if (!o.supplierCode) return App.toast('請先指定廠商並儲存', true);
+    const where = S.testMode ? '（測試模式，只會寫入紀錄）' : `「${supName(o.supplierCode)}」的 LINE 群組`;
+    if (!confirm(`確定把第${o.version}版發送到${where}？`)) return;
+    doAction(btn, '發送中…', () => App.call('a_send', { id: o.id, version: o.version }),
+      () => S.testMode ? '已發單（測試模式，未推播）' : '已發單並推播到 LINE');
+  });
+  on('simBtn', btn => doAction(btn, '處理中…', () => App.call('a_simconfirm', { id: o.id, version: o.sentVersion }), d => d.message));
+  on('clearIssueBtn', btn => doAction(btn, '處理中…', () => App.call('a_clearIssue', { id: o.id }), () => '已標記處理'));
+  on('shipBtn', btn => {
+    if (o.confirmedVersion < o.sentVersion && !confirm('廠商還沒確認最新版本，仍要標記已出貨？')) return;
+    doAction(btn, '處理中…', () => App.call('a_status', { id: o.id, status: '已出貨' }), () => '已標記出貨');
+  });
+  on('erpBtn', btn => doAction(btn, '處理中…', () => App.call('a_status', { id: o.id, status: '已轉正航', erpNo: $('erpNo').value }), () => '已標記轉入正航'));
+  on('cancelBtn', btn => {
+    const msg = o.sentVersion ? `確定取消 ${o.id}？系統會通知廠商這張採購單已取消。` : `確定取消 ${o.id}？`;
+    if (!confirm(msg)) return;
+    doAction(btn, '取消中…', () => App.call('a_cancel', { id: o.id, version: o.version }), () => '訂單已取消');
+  });
+}
+
+async function doAction(btn, label, call, okMsg) {
+  try {
+    const d = await App.busy(btn, label, call);
+    if (d.order) replaceOrder(d.order);
+    S.dirty = false;
+    renderAll();
+    App.toast(okMsg(d));
+  } catch (e) { App.toast(e.message, true); }
+}
+
+async function loadLog(id) {
+  try {
+    const d = await App.call('a_log', { id });
+    if (S.selected !== id || !$('log')) return;
+    $('log').innerHTML = d.log.length ? d.log.map(r => `
+      <li><span class="num">${App.esc(r.time)}</span>　<strong>${App.esc(r.action)}</strong>　<span class="muted">${App.esc(r.actor)}</span>
+      ${r.detail ? `<pre>${App.esc(r.detail)}</pre>` : ''}</li>`).join('') : '<li class="muted">沒有紀錄</li>';
+  } catch (e) {
+    if ($('log')) $('log').innerHTML = `<li class="muted">紀錄載入失敗：${App.esc(e.message)}</li>`;
+  }
+}
+
+/* ───── 帳號管理 ───── */
+async function loadAccounts() {
+  $('accList').innerHTML = '<li class="muted">載入中…</li>';
+  try {
+    S.acc = await App.call('acc_list');
+    renderAccounts();
+  } catch (e) { $('accList').innerHTML = `<li class="muted">${App.esc(e.message)}</li>`; }
+}
+
+function renderAccounts() {
+  const A = S.acc;
+  const order = { '員工': 0, '客戶': 1, '廠商': 2 };
+  const list = A.accounts.slice().sort((a, b) => (order[a.role] - order[b.role]) || a.username.localeCompare(b.username));
+  $('accList').innerHTML = list.map(a => `
+    <li>
+      <div class="acc-main">
+        <strong>${App.esc(a.username)}</strong>　${App.esc(a.name)}
+        <span class="chip chip-${a.role === '員工' ? 'sent' : a.role === '客戶' ? 'ok' : 'pending'}">${a.role}${a.isAdmin ? '・管理帳號' : ''}</span>
+        ${a.active ? '' : '<span class="chip chip-stop">已停用</span>'}
+        <div class="muted">${a.refName ? `${App.esc(a.refName)}（${App.esc(a.ref)}），` : ''}${a.mustChange ? '尚未設定自己的密碼，' : ''}最後登入 ${App.esc(a.lastLogin || '從未')}</div>
+      </div>
+      <div class="acc-actions">
+        <button class="btn btn-sm" data-reset="${App.esc(a.username)}">重設密碼</button>
+        ${a.role === '員工' && a.username !== S.me.username ? `<button class="btn btn-sm" data-admin="${App.esc(a.username)}" data-val="${a.isAdmin ? '0' : '1'}">${a.isAdmin ? '取消管理權限' : '給管理權限'}</button>` : ''}
+        ${a.username !== S.me.username ? `<button class="btn btn-sm ${a.active ? 'btn-danger' : ''}" data-active="${App.esc(a.username)}" data-val="${a.active ? '0' : '1'}">${a.active ? '停用' : '啟用'}</button>` : ''}
+      </div>
+    </li>`).join('');
+
+  const groups = A.groups;
+  $('groupRows').innerHTML = A.suppliers.length ? A.suppliers.map(s => `
+    <div class="group-row">
+      <strong>${App.esc(s.name)}</strong>
+      <select data-group-for="${App.esc(s.code)}" aria-label="${App.esc(s.name)} 的 LINE 群組">
+        <option value="">未設定</option>
+        ${groups.map(g => `<option value="${App.esc(g.groupId)}" ${g.groupId === s.groupId ? 'selected' : ''}>${App.esc(g.time)} 偵測到（${App.esc(g.note)}）${App.esc(g.groupId.slice(0, 10))}…</option>`).join('')}
+        ${s.groupId && !groups.some(g => g.groupId === s.groupId) ? `<option value="${App.esc(s.groupId)}" selected>${App.esc(s.groupId.slice(0, 10))}…</option>` : ''}
+      </select>
+      <button class="btn btn-sm" data-group-save="${App.esc(s.code)}">儲存</button>
+    </div>`).join('') : '<p class="muted">還沒有廠商。新增廠商帳號時會一併建立。</p>';
+  if (!groups.length) $('groupRows').insertAdjacentHTML('beforeend', '<p class="muted">還沒有偵測到任何群組。設定好 LINE Bot 後，把它拉進廠商群組，或在群組裡傳一則訊息。</p>');
+}
+
+$('accList').addEventListener('click', async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  try {
+    if (b.dataset.reset) {
+      if (!confirm(`重設 ${b.dataset.reset} 的密碼？對方下次登入要用新的臨時密碼。`)) return;
+      const d = await App.busy(b, '處理中…', () => App.call('acc_reset', { username: b.dataset.reset }));
+      S.acc = d.list; renderAccounts();
+      showSecret(d.username, d.tempPassword, '密碼已重設');
+    } else if (b.dataset.admin) {
+      const d = await App.busy(b, '處理中…', () => App.call('acc_update', { username: b.dataset.admin, isAdmin: b.dataset.val === '1' }));
+      S.acc = d.list; renderAccounts(); App.toast('已更新');
+    } else if (b.dataset.active) {
+      const on = b.dataset.val === '1';
+      if (!on && !confirm(`停用 ${b.dataset.active}？停用後對方會立即無法使用。`)) return;
+      const d = await App.busy(b, '處理中…', () => App.call('acc_update', { username: b.dataset.active, active: on }));
+      S.acc = d.list; renderAccounts(); App.toast(on ? '已啟用' : '已停用');
+    }
+  } catch (err) { App.toast(err.message, true); }
+});
+
+$('groupRows').addEventListener('click', async e => {
+  const b = e.target.closest('[data-group-save]');
+  if (!b) return;
+  const code = b.dataset.groupSave;
+  const groupId = document.querySelector(`[data-group-for="${code}"]`).value;
+  try {
+    const d = await App.busy(b, '儲存中…', () => App.call('sup_group', { code, groupId }));
+    S.acc = d.list;
+    S.suppliers = d.list.suppliers.map(s => ({ code: s.code, name: s.name, hasGroup: !!s.groupId }));
+    renderAccounts();
+    App.toast('已儲存');
+  } catch (err) { App.toast(err.message, true); }
+});
+
+function showSecret(username, pw, title) {
+  const p = $('secretPanel');
+  p.hidden = false;
+  p.innerHTML = `
+    <div class="banner banner-info">
+      <strong>${App.esc(title)}</strong>：請把帳號和臨時密碼交給對方，第一次登入時會要求改成自己的密碼。這組密碼只會顯示這一次。
+      <div>帳號 <span class="secret">${App.esc(username)}</span></div>
+      <div>臨時密碼 <span class="secret">${App.esc(pw)}</span></div>
+      <div class="actions"><button class="btn btn-sm" id="hideSecret">我已記下</button></div>
+    </div>`;
+  $('hideSecret').addEventListener('click', () => { p.hidden = true; p.innerHTML = ''; });
+  p.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+$('newAccBtn').addEventListener('click', () => {
+  const p = $('newAccPanel');
+  if (!p.hidden) { p.hidden = true; return; }
+  p.hidden = false;
+  renderNewAcc();
+});
+
+function renderNewAcc() {
+  const A = S.acc, r = S.newRole;
+  const refList = r === '客戶' ? A.customers : r === '廠商' ? A.suppliers : [];
+  $('newAccPanel').innerHTML = `
+    <div class="panel" style="background:var(--bg)">
+      <div class="grid2">
+        <div class="field">
+          <label for="nRole">角色</label>
+          <select id="nRole">${['客戶', '廠商', '員工'].map(x => `<option ${x === r ? 'selected' : ''}>${x}</option>`).join('')}</select>
+        </div>
+        <div class="field">
+          <label for="nUser">帳號（英文小寫、數字）</label>
+          <input id="nUser" autocapitalize="none" spellcheck="false" placeholder="例如 harbor01">
+        </div>
+      </div>
+      ${r === '員工' ? `
+        <div class="field"><label for="nName">姓名</label><input id="nName"></div>
+        <label class="check field"><input type="checkbox" id="nAdmin"> 可以管理帳號</label>` : `
+        <div class="field">
+          <label for="nRef">對應的${r}</label>
+          <select id="nRef">
+            <option value="">新增一筆${r}資料</option>
+            ${refList.map(x => `<option value="${App.esc(x.code)}">${App.esc(x.name)}（${App.esc(x.code)}）</option>`).join('')}
+          </select>
+        </div>
+        <div id="newRefFields">
+          ${r === '客戶' ? `
+            <div class="grid2">
+              <div class="field"><label for="nCName">客戶名稱</label><input id="nCName"></div>
+              <div class="field"><label for="nCAddr">送貨地址</label><input id="nCAddr"></div>
+              <div class="field"><label for="nCContact">聯絡人</label><input id="nCContact"></div>
+              <div class="field"><label for="nCPhone">電話</label><input id="nCPhone" inputmode="tel"></div>
+            </div>` : `
+            <div class="field"><label for="nSName">廠商名稱</label><input id="nSName"></div>`}
+        </div>
+        <div class="field"><label for="nName">顯示名稱（選填，預設用${r}名稱）</label><input id="nName"></div>`}
+      <div class="actions">
+        <button id="createAccBtn" class="btn btn-primary">建立帳號</button>
+        <button id="closeNewAcc" class="btn btn-ghost">取消</button>
+      </div>
+    </div>`;
+
+  $('nRole').addEventListener('change', e => { S.newRole = e.target.value; renderNewAcc(); });
+  if ($('nRef')) $('nRef').addEventListener('change', e => { $('newRefFields').hidden = !!e.target.value; });
+  $('closeNewAcc').addEventListener('click', () => { $('newAccPanel').hidden = true; });
+  $('createAccBtn').addEventListener('click', async () => {
+    const v = id => ($(id) ? $(id).value.trim() : '');
+    const payload = { role: r, username: v('nUser'), name: v('nName'), isAdmin: $('nAdmin') ? $('nAdmin').checked : false, ref: v('nRef') };
+    if (r === '客戶' && !payload.ref) payload.newCustomer = { name: v('nCName'), address: v('nCAddr'), contact: v('nCContact'), phone: v('nCPhone') };
+    if (r === '廠商' && !payload.ref) payload.newSupplier = { name: v('nSName') };
+    try {
+      const d = await App.busy($('createAccBtn'), '建立中…', () => App.call('acc_create', payload));
+      S.acc = d.list;
+      S.suppliers = d.list.suppliers.map(s => ({ code: s.code, name: s.name, hasGroup: !!s.groupId }));
+      $('newAccPanel').hidden = true;
+      renderAccounts();
+      showSecret(d.created.username, d.created.tempPassword, '帳號已建立');
+    } catch (err) { App.toast(err.message, true); }
+  });
+  $('nUser').focus();
+}
+
+window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>採購單</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="shell row">
+    <div>
+      <h1>採購單</h1>
+      <p id="hello" class="muted">載入中…</p>
+    </div>
+    <div class="who" id="who"></div>
+  </div>
+</header>
+
+<main class="shell">
+  <div id="error" class="banner banner-error" hidden></div>
+  <div id="body" hidden>
+    <div class="section-head">
+      <nav class="tabs" id="tabs" role="tablist" aria-label="依狀態篩選" style="margin:0"></nav>
+      <button id="refreshBtn" class="btn btn-ghost btn-sm">重新整理</button>
+    </div>
+    <div id="orders"></div>
+  </div>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+App.header();
+
+const TABS = ['待確認接單', '進行中', '全部'];
+const CHIP = { '待確認接單': 'pending', '已回報問題': 'pending', '已確認接單': 'ok', '已出貨': 'done', '已取消': 'stop' };
+const S = { orders: [], tab: '待確認接單', issueOpen: null };
+
+const inTab = (o, t) => t === '全部' ? true
+  : t === '待確認接單' ? (o.status === '待確認接單' || o.status === '已回報問題')
+  : (o.status === '待確認接單' || o.status === '已回報問題' || o.status === '已確認接單');
+
+async function load() {
+  try {
+    const d = await App.call('s_init');
+    S.orders = d.orders;
+    $('hello').textContent = `${d.supplier.name}，您好`;
+    $('body').hidden = false;
+    render();
+  } catch (e) {
+    $('hello').textContent = '';
+    $('error').textContent = e.message;
+    $('error').hidden = false;
+  }
+}
+
+function render() {
+  $('tabs').innerHTML = TABS.map(t => {
+    const n = S.orders.filter(o => inTab(o, t)).length;
+    return `<button class="btn btn-sm tab" role="tab" aria-selected="${t === S.tab}" data-tab="${t}">${t} <span class="num">${n}</span></button>`;
+  }).join('');
+
+  const list = S.orders.filter(o => inTab(o, S.tab));
+  if (!list.length) {
+    $('orders').innerHTML = `<div class="empty">${S.tab === '待確認接單' ? '目前沒有需要確認的採購單。' : '這個分類沒有採購單。'}</div>`;
+    return;
+  }
+  $('orders').innerHTML = list.map(o => {
+    const waiting = o.status === '待確認接單' || o.status === '已回報問題';
+    const updated = waiting && o.confirmedVersion > 0 && o.confirmedVersion < o.version;
+    return `
+    <article class="ticket">
+      <div class="ticket-head">
+        <span class="ticket-no">${App.esc(o.poNo)}</span>
+        <span class="chip chip-${CHIP[o.status] || 'done'}">${App.esc(o.status)}</span>
+      </div>
+      <p class="muted" style="margin:2px 0 0">第${o.version}版，發單時間 <span class="num">${App.esc(o.sentAt)}</span></p>
+      ${updated ? `<div class="issue">這張單已更新。你先前確認的是第${o.confirmedVersion}版，請以第${o.version}版為準並重新確認。</div>` : ''}
+      <dl class="meta">
+        <div><dt>交期</dt><dd class="num">${App.esc(o.deliveryDate)}</dd></div>
+        <div><dt>收貨</dt><dd>${App.esc(o.customerName)}${o.contact ? `（${App.esc(o.contact)}）` : ''}</dd></div>
+        ${o.phone ? `<div><dt>電話</dt><dd class="num">${App.esc(o.phone)}</dd></div>` : ''}
+        <div><dt>送貨地址</dt><dd>${App.esc(o.address)}</dd></div>
+      </dl>
+      <ul class="items">
+        ${o.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${l.qty} ${App.esc(l.unit)}${l.price !== '' ? `，單價 ${l.price}` : ''}</span></li>`).join('')}
+      </ul>
+      ${o.note ? `<p class="note">備註：${App.esc(o.note)}</p>` : ''}
+      ${o.issue ? `<div class="issue">你回報的問題：${App.esc(o.issue)}<br>我們處理後會更新採購單，或直接與你聯絡。</div>` : ''}
+      ${o.status === '已取消' ? '<p class="note">此採購單已取消，請勿出貨。</p>' : ''}
+      ${waiting ? `
+        <div class="actions">
+          <button class="btn btn-primary" data-confirm="${App.esc(o.id)}">確認接單（第${o.version}版）</button>
+          ${o.issue ? '' : `<button class="btn" data-issue="${App.esc(o.id)}">無法照單出貨</button>`}
+        </div>
+        ${S.issueOpen === o.id ? `
+          <div class="field" style="margin-top:12px">
+            <label for="issueText">請說明問題，例如缺貨、數量不足、交期無法配合</label>
+            <textarea id="issueText" rows="3"></textarea>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" data-issue-send="${App.esc(o.id)}">送出回報</button>
+            <button class="btn btn-ghost" data-issue-cancel="1">取消</button>
+          </div>` : ''}` : ''}
+    </article>`;
+  }).join('');
+  if (S.issueOpen && $('issueText')) $('issueText').focus();
+}
+
+$('tabs').addEventListener('click', e => {
+  const t = e.target.closest('[data-tab]');
+  if (t) { S.tab = t.dataset.tab; S.issueOpen = null; render(); }
+});
+
+$('orders').addEventListener('click', async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.confirm) {
+    const o = S.orders.find(x => x.id === b.dataset.confirm);
+    try {
+      const d = await App.busy(b, '確認中…', () => App.call('s_confirm', { id: o.id, version: o.version }));
+      App.toast(d.message);
+      await load();
+    } catch (err) { App.toast(err.message, true); await load(); }
+  } else if (b.dataset.issue) {
+    S.issueOpen = b.dataset.issue; render();
+  } else if (b.dataset.issueCancel) {
+    S.issueOpen = null; render();
+  } else if (b.dataset.issueSend) {
+    const o = S.orders.find(x => x.id === b.dataset.issueSend);
+    try {
+      await App.busy(b, '送出中…', () => App.call('s_issue', { id: o.id, version: o.version, note: $('issueText').value }));
+      S.issueOpen = null;
+      App.toast('已送出，我們會盡快處理');
+      await load();
+    } catch (err) { App.toast(err.message, true); }
+  }
+});
+
+$('refreshBtn').addEventListener('click', async () => {
+  await App.busy($('refreshBtn'), '載入中…', load);
+});
+
+load();
+</script>
+</body>
+</html>

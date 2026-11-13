@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>線上訂貨</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="shell row">
+    <div>
+      <h1>線上訂貨</h1>
+      <p id="hello" class="muted">載入中…</p>
+    </div>
+    <div class="who" id="who"></div>
+  </div>
+</header>
+
+<main class="shell">
+  <div id="error" class="banner banner-error" hidden></div>
+
+  <section id="formPanel" class="panel" hidden>
+    <h2 id="formTitle">新增訂單</h2>
+    <p id="formHint" class="muted"></p>
+    <form id="orderForm" novalidate>
+      <div class="grid2">
+        <div class="field">
+          <label for="fDate">交期</label>
+          <input type="date" id="fDate" required>
+        </div>
+        <div class="field">
+          <label for="fAddr">送貨地址</label>
+          <input id="fAddr" autocomplete="street-address">
+        </div>
+      </div>
+      <fieldset class="field">
+        <legend>品項</legend>
+        <div id="lineRows"></div>
+        <button type="button" id="addLine" class="btn btn-ghost btn-sm">加一個品項</button>
+      </fieldset>
+      <div class="field">
+        <label for="fNote">備註</label>
+        <textarea id="fNote" rows="2" placeholder="例如：上午送達、需冷凍車"></textarea>
+      </div>
+      <div class="actions">
+        <button type="submit" id="submitBtn" class="btn btn-primary">送出訂單</button>
+        <button type="button" id="closeForm" class="btn btn-ghost">返回</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="listPanel" hidden>
+    <div class="section-head">
+      <h2>我的訂單</h2>
+      <button id="newBtn" class="btn btn-primary">新增訂單</button>
+    </div>
+    <div id="orders"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+const S = { customer: null, products: [], orders: [], editing: null };
+const CHIP = { '處理中': 'pending', '已安排出貨': 'sent', '已出貨': 'done', '已取消': 'stop' };
+const $ = id => document.getElementById(id);
+
+App.header();
+
+async function load() {
+  try {
+    const d = await App.call('c_init');
+    Object.assign(S, d);
+    $('hello').textContent = `${S.customer.name}，您好`;
+    $('listPanel').hidden = false;
+    renderOrders();
+  } catch (e) {
+    $('hello').textContent = '';
+    $('error').textContent = e.message;
+    $('error').hidden = false;
+  }
+}
+
+/* 訂單列表 */
+function renderOrders() {
+  const box = $('orders');
+  if (!S.orders.length) {
+    box.innerHTML = '<div class="empty">還沒有訂單。按「新增訂單」開始訂貨。</div>';
+    return;
+  }
+  box.innerHTML = S.orders.map(o => `
+    <article class="ticket">
+      <div class="ticket-head">
+        <span class="ticket-no">${App.esc(o.id)}</span>
+        <span class="chip chip-${CHIP[o.status] || 'done'}">${App.esc(o.status)}</span>
+      </div>
+      <dl class="meta">
+        <div><dt>交期</dt><dd class="num">${App.esc(o.deliveryDate)}</dd></div>
+        <div><dt>送貨地址</dt><dd>${App.esc(o.address)}</dd></div>
+      </dl>
+      <ul class="items">
+        ${o.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${App.esc(l.qty)} ${App.esc(l.unit)}</span></li>`).join('')}
+      </ul>
+      ${o.note ? `<p class="note">備註：${App.esc(o.note)}</p>` : ''}
+      ${o.editable ? `
+        <div class="actions">
+          <button class="btn btn-sm" data-edit="${App.esc(o.id)}">修改</button>
+          <button class="btn btn-sm btn-danger" data-cancel="${App.esc(o.id)}">取消訂單</button>
+        </div>` : (o.status === '已安排出貨' ? '<p class="note">已向廠商叫貨，如需更改請直接聯絡業務。</p>' : '')}
+    </article>`).join('');
+}
+
+$('orders').addEventListener('click', async e => {
+  const editId = e.target.dataset.edit;
+  const cancelId = e.target.dataset.cancel;
+  if (editId) openForm(S.orders.find(o => o.id === editId));
+  if (cancelId) {
+    const o = S.orders.find(x => x.id === cancelId);
+    if (!confirm(`確定要取消 ${o.id}？`)) return;
+    try {
+      const d = await App.busy(e.target, '取消中…', () => App.call('c_cancel', { id: o.id, version: o.version }));
+      replaceOrder(d.order);
+      App.toast('訂單已取消');
+    } catch (err) { App.toast(err.message, true); }
+  }
+});
+
+function replaceOrder(o) {
+  const i = S.orders.findIndex(x => x.id === o.id);
+  if (i >= 0) S.orders[i] = o; else S.orders.unshift(o);
+  renderOrders();
+}
+
+/* 表單 */
+function productOptions(selected) {
+  return '<option value="">選擇品項</option>' + S.products.map(p =>
+    `<option value="${App.esc(p.sku)}" ${p.sku === selected ? 'selected' : ''}>${App.esc(p.name)}</option>`).join('');
+}
+function unitOf(sku) { const p = S.products.find(x => x.sku === sku); return p ? p.unit : ''; }
+
+function addLineRow(l = {}) {
+  const row = document.createElement('div');
+  row.className = 'line-row';
+  row.innerHTML = `
+    <select aria-label="品項">${productOptions(l.sku)}</select>
+    <input type="number" inputmode="decimal" min="0" step="any" aria-label="數量" placeholder="數量" value="${l.qty ?? ''}">
+    <span class="unit">${App.esc(unitOf(l.sku))}</span>
+    <button type="button" class="btn btn-ghost btn-sm" aria-label="移除這個品項">移除</button>`;
+  row.querySelector('select').addEventListener('change', ev => { row.querySelector('.unit').textContent = unitOf(ev.target.value); });
+  row.querySelector('button').addEventListener('click', () => { row.remove(); if (!$('lineRows').children.length) addLineRow(); });
+  $('lineRows').appendChild(row);
+}
+
+function openForm(o) {
+  S.editing = o || null;
+  $('formTitle').textContent = o ? `修改 ${o.id}` : '新增訂單';
+  $('formHint').textContent = o ? '業務確認並向廠商叫貨之前，都可以修改。' : '';
+  $('submitBtn').textContent = o ? '儲存修改' : '送出訂單';
+  $('fDate').value = o ? o.deliveryDate : App.today(1);
+  $('fDate').min = App.today(0);
+  $('fAddr').value = o ? o.address : (S.customer.address || '');
+  $('fNote').value = o ? o.note : '';
+  $('lineRows').innerHTML = '';
+  (o ? o.lines : [{}]).forEach(addLineRow);
+  $('formPanel').hidden = false;
+  $('listPanel').hidden = true;
+  window.scrollTo(0, 0);
+  $('fDate').focus();
+}
+
+function closeForm() {
+  $('formPanel').hidden = true;
+  $('listPanel').hidden = false;
+  S.editing = null;
+}
+
+$('newBtn').addEventListener('click', () => openForm(null));
+$('closeForm').addEventListener('click', closeForm);
+$('addLine').addEventListener('click', () => addLineRow());
+
+$('orderForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const lines = [...$('lineRows').children].map(r => ({
+    sku: r.querySelector('select').value,
+    qty: r.querySelector('input').value,
+  })).filter(l => l.sku || l.qty);
+  if (!$('fDate').value) return App.toast('請選擇交期', true);
+  if (!lines.length) return App.toast('請至少填一個品項', true);
+  if (lines.some(l => !l.sku)) return App.toast('有一列還沒選品項', true);
+  if (lines.some(l => !(Number(l.qty) > 0))) return App.toast('數量要大於 0', true);
+
+  const order = {
+    id: S.editing ? S.editing.id : '',
+    version: S.editing ? S.editing.version : 0,
+    deliveryDate: $('fDate').value,
+    address: $('fAddr').value.trim(),
+    note: $('fNote').value.trim(),
+    lines,
+  };
+  try {
+    const d = await App.busy($('submitBtn'), '傳送中…', () => App.call('c_save', { order }));
+    replaceOrder(d.order);
+    closeForm();
+    App.toast(d.unchanged ? '內容沒有變更' : (d.created ? `訂單 ${d.order.id} 已送出` : '修改已儲存'));
+  } catch (err) { App.toast(err.message, true); }
+});
+
+load();
+</script>
+</body>
+</html>

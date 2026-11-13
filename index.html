@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登入</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="shell"><h1 data-app-title>直送訂單系統</h1></div>
+</header>
+
+<main class="shell">
+  <p id="loading" class="muted" style="text-align:center;margin-top:48px">載入中…</p>
+
+  <section id="loginPanel" class="panel login" hidden>
+    <h2>登入</h2>
+    <p class="muted">使用我們提供的帳號登入。客戶、廠商、員工都從這裡進入。</p>
+    <div id="loginError" class="banner banner-error" hidden></div>
+    <form id="loginForm">
+      <div class="field">
+        <label for="username">帳號</label>
+        <input id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      </div>
+      <div class="field">
+        <label for="password">密碼</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button id="loginBtn" class="btn btn-primary">登入</button>
+    </form>
+    <p class="muted" style="margin-top:16px">忘記密碼請聯絡我們重設。</p>
+  </section>
+
+  <section id="pwPanel" class="panel login" hidden>
+    <h2>修改密碼</h2>
+    <p id="pwHint" class="muted"></p>
+    <div id="pwError" class="banner banner-error" hidden></div>
+    <form id="pwForm">
+      <input type="text" id="pwUser" autocomplete="username" hidden>
+      <div class="field">
+        <label for="oldPw">目前的密碼</label>
+        <input id="oldPw" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="field">
+        <label for="newPw">新密碼（至少 8 個字元）</label>
+        <input id="newPw" type="password" autocomplete="new-password" minlength="8" required>
+      </div>
+      <div class="field">
+        <label for="newPw2">再輸入一次新密碼</label>
+        <input id="newPw2" type="password" autocomplete="new-password" minlength="8" required>
+      </div>
+      <div class="actions">
+        <button id="pwBtn" class="btn btn-primary">儲存新密碼</button>
+        <a id="pwBack" class="btn btn-ghost" href="index.html" hidden>返回</a>
+        <button type="button" id="pwLogout" class="btn btn-ghost">登出</button>
+      </div>
+    </form>
+  </section>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+App.header();
+
+function show(id) {
+  ['loading', 'loginPanel', 'pwPanel'].forEach(x => { $(x).hidden = x !== id; });
+}
+
+function showLogin(msg) {
+  show('loginPanel');
+  $('loginError').hidden = !msg;
+  $('loginError').textContent = msg || '';
+  $('username').focus();
+}
+
+function showPassword(user) {
+  show('pwPanel');
+  $('pwUser').value = user.username;
+  $('pwHint').textContent = user.mustChange
+    ? `${user.name}，這是你第一次登入或密碼剛被重設，請設定自己的密碼。`
+    : `${user.name}，請輸入目前的密碼與新密碼。`;
+  $('pwBack').hidden = user.mustChange;
+  $('pwBack').href = App.homeFor(user.role);
+  $('oldPw').focus();
+}
+
+async function start() {
+  if (!App.session) return showLogin();
+  try {
+    const d = await App.api('me');
+    App.setSession(null, d.user);
+    if (d.user.mustChange || location.hash === '#password') showPassword(d.user);
+    else location.replace(App.homeFor(d.user.role));
+  } catch (e) {
+    if (e.auth) { App.clearSession(); showLogin(); } else showLogin(e.message);
+  }
+}
+
+$('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('loginError').hidden = true;
+  try {
+    const d = await App.busy($('loginBtn'), '登入中…', () => App.api('login', {
+      username: $('username').value.trim(), password: $('password').value,
+    }));
+    App.setSession(d.session, d.user);
+    if (d.user.mustChange) showPassword(d.user);
+    else location.replace(App.homeFor(d.user.role));
+  } catch (err) {
+    $('loginError').textContent = err.message;
+    $('loginError').hidden = false;
+  }
+});
+
+$('pwForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('pwError').hidden = true;
+  if ($('newPw').value !== $('newPw2').value) {
+    $('pwError').textContent = '兩次輸入的新密碼不一樣';
+    $('pwError').hidden = false;
+    return;
+  }
+  try {
+    const d = await App.busy($('pwBtn'), '儲存中…', () => App.api('changePassword', {
+      oldPassword: $('oldPw').value, newPassword: $('newPw').value,
+    }));
+    App.setSession(null, d.user);
+    App.toast('密碼已更新');
+    setTimeout(() => location.replace(App.homeFor(d.user.role)), 700);
+  } catch (err) {
+    if (err.auth === 'login') { App.clearSession(); return showLogin(err.message); }
+    $('pwError').textContent = err.message;
+    $('pwError').hidden = false;
+  }
+});
+
+$('pwLogout').addEventListener('click', App.logout);
+window.addEventListener('hashchange', start);
+start();
+</script>
+</body>
+</html>
