@@ -120,6 +120,7 @@ async function init() {
     const d = await App.call('a_init');
     Object.assign(S, d);
     $('loading').hidden = true;
+    App.setWho(S.me.name);
     $('modeTabs').hidden = false;
     $('accTab').hidden = !S.me.isAdmin;
     $('testBanner').hidden = !S.testMode;

@@ -75,6 +75,7 @@ async function load() {
     const d = await App.call('c_init');
     Object.assign(S, d);
     $('hello').textContent = `${S.customer.name}，您好`;
+    App.setWho(S.customer.name);
     $('listPanel').hidden = false;
     renderOrders();
   } catch (e) {

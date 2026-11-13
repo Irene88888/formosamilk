@@ -50,6 +50,7 @@ async function load() {
     const d = await App.call('s_init');
     S.orders = d.orders;
     $('hello').textContent = `${d.supplier.name}，您好`;
+    App.setWho(d.supplier.name);
     $('body').hidden = false;
     render();
   } catch (e) {

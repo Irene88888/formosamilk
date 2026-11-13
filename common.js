@@ -63,10 +63,19 @@ const App = {
     const u = App.user;
     if (!el) return;
     if (!App.session) { location.href = 'index.html'; return; }
-    el.innerHTML = `<span>${App.esc(u ? (u.refName || u.name) : '')}</span>
+    el.innerHTML = `<span id="whoName">${App.esc(u ? (u.refName || u.name) : '')}</span>
       <a href="index.html#password">修改密碼</a>
       <button class="btn btn-ghost btn-sm" id="logoutBtn">登出</button>`;
     document.getElementById('logoutBtn').addEventListener('click', App.logout);
+  },
+
+  /** 頁面載入後用伺服器的最新名稱更新頁首（客戶或廠商改名後不必重新登入） */
+  setWho(name) {
+    if (!name) return;
+    const el = document.getElementById('whoName');
+    if (el) el.textContent = name;
+    const u = App.user;
+    if (u) { u.refName = name; App.setSession(null, u); }
   },
 
   esc(s) {
