@@ -49,16 +49,8 @@
         <h2>雲端訂貨表（自動同步）</h2>
         <button id="syncAllBtn" class="btn btn-sm">全部立即同步</button>
       </div>
-      <p class="muted">廠商的訂貨紀錄表放在 Google 雲端時，系統每 15 分鐘同步一次，發單、發送變更、取消時也會立刻同步：系統把訂單寫進 B～G 欄，廠商只要填 H 欄「實際出貨數量」，系統就會讀回來。</p>
+      <p class="muted">在系統試算表的「品項」工作表，把廠商訂貨表的網址貼在該品項的「廠商訂貨表網址」欄，就完成設定。之後按「發單」會立刻寫進訂貨表；廠商按 LINE 訊息裡的「接收訂單」，「公司確認」會變成「已確認」；廠商填的「實際出貨數量」每 15 分鐘讀回一次。</p>
       <ul class="acc-list" id="linkList"><li class="muted">載入中…</li></ul>
-      <h3>新增雲端訂貨表</h3>
-      <div class="grid2">
-        <div class="field"><label for="lkSup">廠商</label><select id="lkSup"></select></div>
-        <div class="field"><label for="lkSku">品項（一張表一個品項）</label><select id="lkSku"></select></div>
-        <div class="field"><label for="lkUrl">Google 試算表網址</label><input id="lkUrl" placeholder="https://docs.google.com/spreadsheets/d/…"></div>
-        <div class="field"><label for="lkFrom">從這天以後發單的訂單開始寫入</label><input type="date" id="lkFrom"></div>
-      </div>
-      <div class="actions"><button id="lkAddBtn" class="btn btn-primary">連結並同步</button></div>
     </section>
 
     <section class="panel">
@@ -257,12 +249,23 @@ function renderDetail() {
     ${editable ? editForm(o) : readonly(o)}
     ${shipBlock(o.ship)}
     <div class="actions">${actionButtons(o)}</div>
+    ${msgBlock(o)}
     <h3>處理紀錄</h3>
     <ul class="log" id="log"><li class="muted">載入中…</li></ul>`;
 
   if (editable) bindEditForm(o);
   bindActions(o);
   loadLog(o.id);
+}
+
+function msgBlock(o) {
+  if (!o.lastMessage || !o.sentVersion) return '';
+  if (!ACTIVE.includes(o.status) && o.status !== '已取消') return '';
+  return `
+    <h3>給廠商的 LINE 訊息</h3>
+    <p class="muted">${S.testMode ? 'LINE Bot 尚未啟用，請複製這段訊息貼到廠商群組。' : '已由 LINE Bot 推播；需要時也可以複製再傳一次。'}廠商點訊息裡的連結按「接收訂單」，系統就會改成廠商已確認，訂貨紀錄表的「公司確認」也會變成「已確認」。</p>
+    <textarea id="lineMsg" rows="8" readonly>${App.esc(o.lastMessage)}</textarea>
+    <div class="actions"><button id="copyMsgBtn" class="btn btn-sm">複製訊息</button></div>`;
 }
 
 function shipBlock(ship) {
@@ -363,7 +366,7 @@ function markDirty() {
 function actionButtons(o) {
   const editable = ACTIVE.includes(o.status);
   const unsent = o.version > o.sentVersion;
-  const how = S.testMode ? '（測試模式）' : '並推播 LINE';
+  const how = S.testMode ? '' : '並推播 LINE';
   const b = [];
   if (editable) b.push(`<button id="sendBtn" class="btn btn-primary" ${unsent ? '' : 'disabled'}>${o.sentVersion ? '發送變更' : '發單'}${how}</button>`);
   if (S.testMode && o.status === '已叫貨' && o.confirmedVersion < o.sentVersion && !unsent) b.push('<button id="simBtn" class="btn">模擬廠商確認</button>');
@@ -374,12 +377,17 @@ function actionButtons(o) {
 
 function bindActions(o) {
   const on = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', () => fn(el)); };
+  on('copyMsgBtn', async () => {
+    const ta = $('lineMsg');
+    try { await navigator.clipboard.writeText(ta.value); } catch (e) { ta.select(); document.execCommand('copy'); }
+    App.toast('已複製，貼到 LINE 群組即可');
+  });
   on('sendBtn', btn => {
     if (!o.supplierCode) return App.toast('請先指定廠商並儲存', true);
     const where = S.testMode ? '（測試模式，只會寫入紀錄）' : `「${supName(o.supplierCode)}」的 LINE 群組`;
     if (!confirm(`確定把第${o.version}版發送到${where}？`)) return;
-    doAction(btn, '發送中…', () => App.call('a_send', { id: o.id, version: o.version }),
-      () => S.testMode ? '已發單（測試模式，未推播）' : '已發單並推播到 LINE');
+    doAction(btn, '發送中…', () => App.call('a_send', { id: o.id, version: o.version, siteBase: location.href.replace(/[?#].*$/, '').replace(/[^/]*$/, '') }),
+      () => S.testMode ? '已發單，已寫入廠商訂貨表；請複製下方訊息貼到 LINE 群組' : '已發單並推播到 LINE');
   });
   on('simBtn', btn => doAction(btn, '處理中…', () => App.call('a_simconfirm', { id: o.id, version: o.sentVersion }), d => d.message));
   on('clearIssueBtn', btn => doAction(btn, '處理中…', () => App.call('a_clearIssue', { id: o.id }), () => '已標記處理'));
@@ -591,9 +599,6 @@ function renderSheetForm() {
   if (!$('exFrom').value) $('exFrom').value = App.today(0).slice(0, 8) + '01';
   if (!$('exTo').value) $('exTo').value = App.today(0);
   if (!$('imDate').value) $('imDate').value = App.today(0);
-  $('lkSup').innerHTML = $('exSup').innerHTML;
-  $('lkSku').innerHTML = $('exSku').innerHTML;
-  if (!$('lkFrom').value) $('lkFrom').value = App.today(0);
   loadLinks();
 }
 
@@ -606,16 +611,16 @@ function renderLinks(links) {
   $('linkList').innerHTML = links.length ? links.map(l => `
     <li>
       <div class="acc-main">
-        <strong>${App.esc(l.supplierName)}</strong>　${App.esc(l.productName)}
+        <strong>${App.esc(l.productName)}</strong>　${l.supplierCode ? App.esc(l.supplierName) : '<span class="muted">第一次發單時自動對應廠商</span>'}
         ${l.active === 'N' ? '<span class="chip chip-stop">已暫停</span>' : ''}
         <div class="muted">${l.lastSync ? `${App.esc(l.lastSync)} 同步：${App.esc(l.lastResult)}` : '尚未同步'}</div>
         <div class="muted">${App.esc(l.fromDate)} 起的訂單，<a href="${App.esc(l.url)}" target="_blank" rel="noopener">開啟試算表</a></div>
       </div>
       <div class="acc-actions">
-        <button class="btn btn-sm" data-sync="${App.esc(l.fileId)}" ${l.active === 'N' ? 'disabled' : ''}>立即同步</button>
+        <button class="btn btn-sm" data-sync="${App.esc(l.fileId)}" ${l.active === 'N' || !l.supplierCode ? 'disabled' : ''}>立即同步</button>
         <button class="btn btn-sm ${l.active === 'N' ? '' : 'btn-danger'}" data-toggle="${App.esc(l.fileId)}" data-val="${l.active === 'N' ? '1' : '0'}">${l.active === 'N' ? '恢復同步' : '暫停同步'}</button>
       </div>
-    </li>`).join('') : '<li class="muted">還沒有連結任何雲端訂貨表。</li>';
+    </li>`).join('') : '<li class="muted">還沒有設定。到系統試算表的「品項」工作表，在品項的「廠商訂貨表網址」欄貼上網址即可。</li>';
 }
 
 $('linkList').addEventListener('click', async e => {
@@ -641,14 +646,7 @@ $('syncAllBtn').addEventListener('click', () => App.busy($('syncAllBtn'), '同�
   } catch (err) { App.toast(err.message, true); }
 }));
 
-$('lkAddBtn').addEventListener('click', () => App.busy($('lkAddBtn'), '連結中…', async () => {
-  try {
-    const d = await App.call('a_linkAdd', { supplierCode: $('lkSup').value, sku: $('lkSku').value, url: $('lkUrl').value.trim(), fromDate: $('lkFrom').value });
-    renderLinks(d.links);
-    $('lkUrl').value = '';
-    App.toast('已連結並完成第一次同步');
-  } catch (err) { App.toast(err.message, true); }
-}));
+
 
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
 
