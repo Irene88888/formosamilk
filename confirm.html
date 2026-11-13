@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>接收訂單</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .big { width: 100%; min-height: 52px; font-size: 18px; }
+  .done { text-align: center; padding: 8px 0 4px; }
+  .done strong { display: block; font-size: 20px; color: var(--ok); margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="shell"><h1>接收訂單</h1></div>
+</header>
+
+<main class="shell">
+  <p id="loading" class="muted">載入中…</p>
+  <div id="error" class="banner banner-error" hidden></div>
+  <article id="po" class="ticket" hidden></article>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const t = new URLSearchParams(location.search).get('t') || '';
+
+function render(po, justConfirmed) {
+  const ended = po.status === '已出貨';
+  $('po').hidden = false;
+  $('po').innerHTML = `
+    <div class="ticket-head">
+      <span class="ticket-no">${App.esc(po.poNo)}</span>
+      <span class="chip chip-${po.confirmed ? 'ok' : 'pending'}">${po.confirmed ? '已接收' : '待接收'}</span>
+    </div>
+    <p class="muted" style="margin:2px 0 0">第${po.version}版${po.supplierName ? `，${App.esc(po.supplierName)}` : ''}</p>
+    <dl class="meta">
+      <div><dt>交期</dt><dd class="num">${App.esc(po.deliveryDate)}</dd></div>
+      <div><dt>收貨</dt><dd>${App.esc(po.customerName)}</dd></div>
+      <div><dt>送貨地址</dt><dd>${App.esc(po.address)}</dd></div>
+    </dl>
+    <ul class="items">${po.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${l.qty} ${App.esc(l.unit)}${l.price !== '' ? `，單價 ${l.price}` : ''}</span></li>`).join('')}</ul>
+    ${po.note ? `<p class="note">備註：${App.esc(po.note)}</p>` : ''}
+    <div style="margin-top:16px">
+      ${po.confirmed
+        ? `<div class="done"><strong>${justConfirmed ? '已接收，謝謝' : '這個版本已經接收過了'}</strong>
+             <span class="muted">${ended ? '這張單已出貨。' : '訂貨紀錄表的「公司確認」已更新為「已確認」。'}</span></div>`
+        : `<button id="okBtn" class="btn btn-primary big">接收訂單（第${po.version}版）</button>
+           <p class="muted" style="text-align:center">按下後，訂貨紀錄表的「公司確認」會變成「已確認」。</p>`}
+    </div>`;
+  const btn = $('okBtn');
+  if (btn) btn.addEventListener('click', async () => {
+    try {
+      const d = await App.busy(btn, '處理中…', () => App.api('pub_confirm', { t }));
+      render(d.po, true);
+    } catch (e) { showError(e.message); }
+  });
+}
+
+function showError(msg) {
+  $('loading').hidden = true;
+  $('po').hidden = true;
+  $('error').textContent = msg;
+  $('error').hidden = false;
+}
+
+(async () => {
+  if (!t) return showError('連結不完整，請從 LINE 訊息重新開啟');
+  try {
+    const d = await App.api('pub_peek', { t });
+    $('loading').hidden = true;
+    render(d.po, false);
+  } catch (e) { showError(e.message); }
+})();
+</script>
+</body>
+</html>
