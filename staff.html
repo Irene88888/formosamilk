@@ -45,6 +45,23 @@
   <!-- 廠商訂貨表 -->
   <div id="sheetView" hidden>
     <section class="panel">
+      <div class="section-head">
+        <h2>雲端訂貨表（自動同步）</h2>
+        <button id="syncAllBtn" class="btn btn-sm">全部立即同步</button>
+      </div>
+      <p class="muted">廠商的訂貨紀錄表放在 Google 雲端時，系統每 15 分鐘同步一次，發單、發送變更、取消時也會立刻同步：系統把訂單寫進 B～G 欄，廠商只要填 H 欄「實際出貨數量」，系統就會讀回來。</p>
+      <ul class="acc-list" id="linkList"><li class="muted">載入中…</li></ul>
+      <h3>新增雲端訂貨表</h3>
+      <div class="grid2">
+        <div class="field"><label for="lkSup">廠商</label><select id="lkSup"></select></div>
+        <div class="field"><label for="lkSku">品項（一張表一個品項）</label><select id="lkSku"></select></div>
+        <div class="field"><label for="lkUrl">Google 試算表網址</label><input id="lkUrl" placeholder="https://docs.google.com/spreadsheets/d/…"></div>
+        <div class="field"><label for="lkFrom">從這天以後發單的訂單開始寫入</label><input type="date" id="lkFrom"></div>
+      </div>
+      <div class="actions"><button id="lkAddBtn" class="btn btn-primary">連結並同步</button></div>
+    </section>
+
+    <section class="panel">
       <h2>匯出訂貨紀錄表給廠商</h2>
       <p class="muted">把已發單的訂單填進廠商的「單品項訂貨紀錄」表。一個品項一張表；備註欄會帶入採購單號，廠商填回時系統靠它對應訂單，請提醒廠商不要修改備註欄。</p>
       <div class="grid2">
@@ -574,7 +591,64 @@ function renderSheetForm() {
   if (!$('exFrom').value) $('exFrom').value = App.today(0).slice(0, 8) + '01';
   if (!$('exTo').value) $('exTo').value = App.today(0);
   if (!$('imDate').value) $('imDate').value = App.today(0);
+  $('lkSup').innerHTML = $('exSup').innerHTML;
+  $('lkSku').innerHTML = $('exSku').innerHTML;
+  if (!$('lkFrom').value) $('lkFrom').value = App.today(0);
+  loadLinks();
 }
+
+async function loadLinks() {
+  try { renderLinks((await App.call('a_links')).links); }
+  catch (e) { $('linkList').innerHTML = `<li class="muted">${App.esc(e.message)}</li>`; }
+}
+
+function renderLinks(links) {
+  $('linkList').innerHTML = links.length ? links.map(l => `
+    <li>
+      <div class="acc-main">
+        <strong>${App.esc(l.supplierName)}</strong>　${App.esc(l.productName)}
+        ${l.active === 'N' ? '<span class="chip chip-stop">已暫停</span>' : ''}
+        <div class="muted">${l.lastSync ? `${App.esc(l.lastSync)} 同步：${App.esc(l.lastResult)}` : '尚未同步'}</div>
+        <div class="muted">${App.esc(l.fromDate)} 起的訂單，<a href="${App.esc(l.url)}" target="_blank" rel="noopener">開啟試算表</a></div>
+      </div>
+      <div class="acc-actions">
+        <button class="btn btn-sm" data-sync="${App.esc(l.fileId)}" ${l.active === 'N' ? 'disabled' : ''}>立即同步</button>
+        <button class="btn btn-sm ${l.active === 'N' ? '' : 'btn-danger'}" data-toggle="${App.esc(l.fileId)}" data-val="${l.active === 'N' ? '1' : '0'}">${l.active === 'N' ? '恢復同步' : '暫停同步'}</button>
+      </div>
+    </li>`).join('') : '<li class="muted">還沒有連結任何雲端訂貨表。</li>';
+}
+
+$('linkList').addEventListener('click', async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  try {
+    if (b.dataset.sync) {
+      const d = await App.busy(b, '同步中…', () => App.call('a_syncNow', { fileId: b.dataset.sync }));
+      renderLinks(d.links); App.toast('同步完成');
+      S.orders = (await App.call('a_init')).orders;
+    } else if (b.dataset.toggle) {
+      const d = await App.busy(b, '處理中…', () => App.call('a_linkToggle', { fileId: b.dataset.toggle, active: b.dataset.val === '1' }));
+      renderLinks(d.links);
+    }
+  } catch (err) { App.toast(err.message, true); }
+});
+
+$('syncAllBtn').addEventListener('click', () => App.busy($('syncAllBtn'), '同步中…', async () => {
+  try {
+    const d = await App.call('a_syncNow', {});
+    renderLinks(d.links); App.toast('同步完成');
+    S.orders = (await App.call('a_init')).orders;
+  } catch (err) { App.toast(err.message, true); }
+}));
+
+$('lkAddBtn').addEventListener('click', () => App.busy($('lkAddBtn'), '連結中…', async () => {
+  try {
+    const d = await App.call('a_linkAdd', { supplierCode: $('lkSup').value, sku: $('lkSku').value, url: $('lkUrl').value.trim(), fromDate: $('lkFrom').value });
+    renderLinks(d.links);
+    $('lkUrl').value = '';
+    App.toast('已連結並完成第一次同步');
+  } catch (err) { App.toast(err.message, true); }
+}));
 
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
 
