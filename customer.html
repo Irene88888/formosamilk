@@ -200,12 +200,36 @@ $('orderForm').addEventListener('submit', async e => {
     note: $('fNote').value.trim(),
     lines,
   };
+  // 先回到訂單列表，顯示「傳送中」的卡片，不用盯著表單等；失敗時把表單原樣帶回來
+  const editing = S.editing;
+  const unitOf = sku => (S.products.find(p => p.sku === sku) || {}).unit || '';
+  const nameOf = sku => (S.products.find(p => p.sku === sku) || {}).name || sku;
+  $('formPanel').hidden = true;
+  $('listPanel').hidden = false;
+  $('newBtn').disabled = true;
+  const pending = document.createElement('article');
+  pending.className = 'ticket';
+  pending.innerHTML = `
+    <div class="ticket-head"><span class="ticket-no">${editing ? App.esc(editing.id) : '新訂單'}</span><span class="chip chip-sent">傳送中…</span></div>
+    <dl class="meta"><div><dt>交期</dt><dd class="num">${App.esc(order.deliveryDate)}</dd></div></dl>
+    <ul class="items">${lines.map(l => `<li><span>${App.esc(nameOf(l.sku))}</span><span class="num">${App.esc(l.qty)} ${App.esc(unitOf(l.sku))}</span></li>`).join('')}</ul>`;
+  if (!S.orders.length) $('orders').innerHTML = '';
+  $('orders').prepend(pending);
+  window.scrollTo(0, 0);
   try {
-    const d = await App.busy($('submitBtn'), '傳送中…', () => App.call('c_save', { order }));
+    const d = await App.call('c_save', { order });
     replaceOrder(d.order);
-    closeForm();
+    S.editing = null;
     App.toast(d.unchanged ? '內容沒有變更' : (d.created ? `訂單 ${d.order.id} 已送出` : '修改已儲存'));
-  } catch (err) { App.toast(err.message, true); }
+  } catch (err) {
+    pending.remove();
+    if (!S.orders.length) renderOrders();
+    $('formPanel').hidden = false;
+    $('listPanel').hidden = true;
+    App.toast(err.message + '（表單內容已保留，可以修改後再送出）', true);
+  } finally {
+    $('newBtn').disabled = false;
+  }
 });
 
 load();
