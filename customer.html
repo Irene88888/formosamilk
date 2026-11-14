@@ -106,25 +106,48 @@ function renderOrders() {
         ${o.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${App.esc(l.qty)} ${App.esc(l.unit)}</span></li>`).join('')}
       </ul>
       ${o.note ? `<p class="note">備註：${App.esc(o.note)}</p>` : ''}
+      ${pendingBox(o)}
       ${o.editable ? `
+        ${o.pending ? '' : `<p class="note">${o.locked
+          ? `已進入出貨前 2 天，修改或取消需經我們放行。`
+          : `<span class="num">${App.esc(o.lockDate)}</span> 起修改需經我們放行；交期提前也需要放行。`}</p>`}
         <div class="actions">
-          <button class="btn btn-sm" data-edit="${App.esc(o.id)}">修改</button>
-          <button class="btn btn-sm btn-danger" data-cancel="${App.esc(o.id)}">取消訂單</button>
-        </div>` : (o.status === '已安排出貨' ? '<p class="note">已向廠商叫貨，如需更改請直接聯絡業務。</p>' : '')}
+          <button class="btn btn-sm" data-edit="${App.esc(o.id)}">${o.locked || o.pending ? '申請修改' : '修改'}</button>
+          ${o.pending ? `<button class="btn btn-sm btn-ghost" data-withdraw="${App.esc(o.id)}">撤回申請</button>`
+            : `<button class="btn btn-sm btn-danger" data-cancel="${App.esc(o.id)}">${o.locked || o.status === '已安排出貨' ? '申請取消' : '取消訂單'}</button>`}
+        </div>` : ''}
     </article>`).join('');
+}
+
+function pendingBox(o) {
+  const p = o.pending;
+  if (!p) return '';
+  const what = p.type === 'cancel' ? '取消訂單'
+    : `交期 <span class="num">${App.esc(p.deliveryDate)}</span>；${p.lines.map(l => `${App.esc(l.name)} ${l.qty} ${App.esc(l.unit)}`).join('、')}`;
+  return `<div class="issue"><strong>申請待放行</strong>（${App.esc((p.reasons || []).join('、'))}）<br>${what}<br>
+    <span>我們確認後才會生效，目前仍以上方內容為準。</span></div>`;
 }
 
 $('orders').addEventListener('click', async e => {
   const editId = e.target.dataset.edit;
   const cancelId = e.target.dataset.cancel;
+  const wdId = e.target.dataset.withdraw;
+  if (wdId) {
+    try {
+      const d = await App.busy(e.target, '處理中…', () => App.call('c_withdraw', { id: wdId }));
+      replaceOrder(d.order);
+      App.toast('已撤回申請');
+    } catch (err) { App.toast(err.message, true); }
+    return;
+  }
   if (editId) openForm(S.orders.find(o => o.id === editId));
   if (cancelId) {
     const o = S.orders.find(x => x.id === cancelId);
     if (!confirm(`確定要取消 ${o.id}？`)) return;
     try {
-      const d = await App.busy(e.target, '取消中…', () => App.call('c_cancel', { id: o.id, version: o.version }));
+      const d = await App.busy(e.target, '處理中…', () => App.call('c_cancel', { id: o.id, version: o.version }));
       replaceOrder(d.order);
-      App.toast('訂單已取消');
+      App.toast(d.pending ? '已送出取消申請，待我們放行' : '訂單已取消');
     } catch (err) { App.toast(err.message, true); }
   }
 });
@@ -158,14 +181,18 @@ function addLineRow(l = {}) {
 function openForm(o) {
   S.editing = o || null;
   $('formTitle').textContent = o ? `修改 ${o.id}` : '新增訂單';
-  $('formHint').textContent = o ? '業務確認並向廠商叫貨之前，都可以修改。' : '';
+  $('formHint').textContent = !o ? ''
+    : o.locked ? '已進入出貨前 2 天，送出後需經我們放行才會生效。'
+    : `${o.lockDate} 前可以直接修改；交期往前提需經我們放行。`;
   $('submitBtn').textContent = o ? '儲存修改' : '送出訂單';
   $('fDate').value = o ? o.deliveryDate : App.today(1);
   $('fDate').min = App.today(0);
   $('fAddr').value = o ? o.address : (S.customer.address || '');
   $('fNote').value = o ? o.note : '';
   $('lineRows').innerHTML = '';
-  (o ? o.lines : [{}]).forEach(addLineRow);
+  const src = o && o.pending && o.pending.type === 'edit' ? o.pending : o;
+  if (src && src !== o) { $('fDate').value = src.deliveryDate; $('fAddr').value = src.address; $('fNote').value = src.note; }
+  (src ? src.lines : [{}]).forEach(addLineRow);
   $('formPanel').hidden = false;
   $('listPanel').hidden = true;
   window.scrollTo(0, 0);
@@ -221,7 +248,7 @@ $('orderForm').addEventListener('submit', async e => {
     const d = await App.call('c_save', { order });
     replaceOrder(d.order);
     S.editing = null;
-    App.toast(d.unchanged ? '內容沒有變更' : (d.created ? `訂單 ${d.order.id} 已送出` : '修改已儲存'));
+    App.toast(d.unchanged ? '內容沒有變更' : d.pending ? `已送出修改申請（${d.reasons.join('、')}），待我們放行` : (d.created ? `訂單 ${d.order.id} 已送出` : '修改已儲存'));
   } catch (err) {
     pending.remove();
     if (!S.orders.length) renderOrders();

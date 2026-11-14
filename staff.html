@@ -164,6 +164,7 @@ const hasIssue = o => o.issue && o.issueVersion === o.sentVersion && ACTIVE.incl
 
 function flags(o) {
   if (!ACTIVE.includes(o.status)) return '';
+  if (o.pending) return o.pending.type === 'cancel' ? '客戶申請取消，待放行' : '客戶申請修改，待放行';
   if (hasIssue(o)) return '廠商回報問題';
   if (o.sentVersion === 0) return '尚未發單';
   if (o.version > o.sentVersion) return `第${o.version}版尚未發單`;
@@ -225,6 +226,30 @@ function renderDetail() {
   const unsent = o.version > o.sentVersion;
 
   let notice = '';
+  const p = o.pending;
+  if (p && editable) {
+    const diff = [];
+    if (p.type === 'edit') {
+      if (p.deliveryDate !== o.deliveryDate) diff.push(`交期：${o.deliveryDate} → ${p.deliveryDate}`);
+      if (p.address !== o.address) diff.push(`地址改為：${p.address}`);
+      if (p.note !== o.note) diff.push(`備註改為：${p.note || '（無）'}`);
+      p.lines.forEach(l => {
+        const c = o.lines.find(x => x.sku === l.sku);
+        if (!c) diff.push(`新增 ${l.name} ${l.qty} ${l.unit}`);
+        else if (Number(c.qty) !== Number(l.qty)) diff.push(`${l.name}：${c.qty} → ${l.qty} ${l.unit}`);
+      });
+      o.lines.forEach(l => { if (!p.lines.some(x => x.sku === l.sku)) diff.push(`刪除 ${l.name}`); });
+    }
+    notice += `<div class="issue"><strong>${p.type === 'cancel' ? '客戶申請取消' : '客戶申請修改'}，待放行</strong>（${App.esc((p.reasons || []).join('、'))}；${App.esc(p.requestedAt)}）
+      ${diff.length ? '<br>' + diff.map(App.esc).join('<br>') : ''}
+      ${p.baseVersion !== o.version ? `<br>注意：申請是依第${p.baseVersion}版提出，之後訂單已改為第${o.version}版。` : ''}
+      <div class="actions">
+        <button id="approveBtn" class="btn btn-sm btn-primary">放行${p.type === 'cancel' ? '取消' : '修改'}</button>
+        <button id="rejectBtn" class="btn btn-sm">退回</button>
+      </div>
+      ${p.type === 'edit' && o.sentVersion ? '<span>放行後會成為新版本，記得再按「發送變更」通知廠商。</span>' : ''}</div>`;
+  }
+  if (editable && !p) notice += `<p class="muted">客戶自行修改期限：<span class="num">${App.esc(o.lockDate)}</span> 前（出貨前 2 天起需放行）。</p>`;
   if (hasIssue(o)) notice = `<div class="issue"><strong>廠商回報（第${o.issueVersion}版）：</strong>${App.esc(o.issue)}
       <div class="actions"><button id="clearIssueBtn" class="btn btn-sm">標記已處理</button></div></div>`;
   if (editable && o.sentVersion === 0) notice += '<div class="banner banner-info">還沒發單。指定廠商、確認內容後按「發單」。</div>';
@@ -391,6 +416,18 @@ function bindActions(o) {
       () => S.testMode ? '已發單，已寫入廠商訂貨表；請複製下方訊息貼到 LINE 群組' : '已發單並推播到 LINE');
   });
   on('simBtn', btn => doAction(btn, '處理中…', () => App.call('a_simconfirm', { id: o.id, version: o.sentVersion }), d => d.message));
+  on('approveBtn', btn => {
+    const msg = o.pending.type === 'cancel'
+      ? `確定放行取消 ${o.id}？${o.sentVersion ? '系統會通知廠商這張採購單已取消。' : ''}`
+      : `確定放行客戶的修改？會成為第${o.version + 1}版。`;
+    if (!confirm(msg)) return;
+    doAction(btn, '處理中…', () => App.call('a_approve', { id: o.id }), () => '已放行');
+  });
+  on('rejectBtn', btn => {
+    const reason = prompt('退回原因（選填，會記在處理紀錄）', '');
+    if (reason === null) return;
+    doAction(btn, '處理中…', () => App.call('a_reject', { id: o.id, reason }), () => '已退回申請');
+  });
   on('clearIssueBtn', btn => doAction(btn, '處理中…', () => App.call('a_clearIssue', { id: o.id }), () => '已標記處理'));
   on('shipBtn', btn => {
     const warn = o.confirmedVersion < o.sentVersion ? '廠商還沒確認最新版本。' : '';
