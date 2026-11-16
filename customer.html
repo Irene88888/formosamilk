@@ -55,6 +55,7 @@
       <h2>我的訂單</h2>
       <button id="newBtn" class="btn btn-primary">新增訂單</button>
     </div>
+    <div id="palletBox"></div>
     <div id="orders"></div>
   </section>
 </main>
@@ -78,6 +79,7 @@ async function load() {
     App.setWho(S.customer.name);
     $('listPanel').hidden = false;
     renderOrders();
+    loadPallets();
   } catch (e) {
     $('hello').textContent = '';
     $('error').textContent = e.message;
@@ -86,6 +88,16 @@ async function load() {
 }
 
 /* 訂單列表 */
+// 目前在客戶這裡、還沒收回的棧板
+async function loadPallets() {
+  try {
+    const d = await App.call('c_pallets');
+    const list = d.balances.filter(r => r.balance !== 0);
+    $('palletBox').innerHTML = list.length ? `<div class="banner banner-info">目前在您這裡、尚未收回的棧板：${
+      list.map(r => `${list.length > 1 ? App.esc(r.supplierName) + ' ' : ''}<strong class="num">${r.balance}</strong> 板`).join('、')}。數量有出入請聯絡我們。</div>` : '';
+  } catch (e) { /* 棧板資訊載入失敗不影響下單 */ }
+}
+
 function renderOrders() {
   const box = $('orders');
   if (!S.orders.length) {
@@ -109,7 +121,7 @@ function renderOrders() {
       ${pendingBox(o)}
       ${o.editable ? `
         ${o.pending ? '' : `<p class="note">${o.locked
-          ? `已進入出貨前 2 天，修改或取消需經我們放行。`
+          ? `已進入出貨前 3 天，修改或取消需經我們放行。`
           : `<span class="num">${App.esc(o.lockDate)}</span> 起修改需經我們放行；交期提前也需要放行。`}</p>`}
         <div class="actions">
           <button class="btn btn-sm" data-edit="${App.esc(o.id)}">${o.locked || o.pending ? '申請修改' : '修改'}</button>
@@ -182,11 +194,12 @@ function openForm(o) {
   S.editing = o || null;
   $('formTitle').textContent = o ? `修改 ${o.id}` : '新增訂單';
   $('formHint').textContent = !o ? ''
-    : o.locked ? '已進入出貨前 2 天，送出後需經我們放行才會生效。'
+    : o.locked ? '已進入出貨前 3 天，送出後需經我們放行才會生效。'
     : `${o.lockDate} 前可以直接修改；交期往前提需經我們放行。`;
   $('submitBtn').textContent = o ? '儲存修改' : '送出訂單';
-  $('fDate').value = o ? o.deliveryDate : App.today(1);
-  $('fDate').min = App.today(0);
+  // 新訂單：交期最早為 3 天後（D+3）
+  $('fDate').value = o ? o.deliveryDate : App.today(3);
+  $('fDate').min = o ? App.today(0) : App.today(3);
   $('fAddr').value = o ? o.address : (S.customer.address || '');
   $('fNote').value = o ? o.note : '';
   $('lineRows').innerHTML = '';

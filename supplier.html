@@ -36,7 +36,7 @@
 const $ = id => document.getElementById(id);
 App.header();
 
-const TABS = ['待確認接單', '待出貨', '已出貨', '全部'];
+const TABS = ['待確認接單', '待出貨', '已出貨', '全部', '棧板'];
 const CHIP = { '待確認接單': 'pending', '已回報問題': 'pending', '已確認接單': 'ok', '已出貨': 'done', '已取消': 'stop' };
 const S = { orders: [], tab: '待確認接單', issueOpen: null, shipOpen: null };
 
@@ -46,6 +46,7 @@ const inTab = (o, t) => t === '全部' ? true
   : o.status === '已出貨';
 
 async function load() {
+  PAL = null;
   try {
     const d = await App.call('s_init');
     S.orders = d.orders;
@@ -62,9 +63,10 @@ async function load() {
 
 function render() {
   $('tabs').innerHTML = TABS.map(t => {
-    const n = S.orders.filter(o => inTab(o, t)).length;
+    const n = t === '棧板' ? '' : S.orders.filter(o => inTab(o, t)).length;
     return `<button class="btn btn-sm tab" role="tab" aria-selected="${t === S.tab}" data-tab="${t}">${t} <span class="num">${n}</span></button>`;
   }).join('');
+  if (S.tab === '棧板') return renderPallets();
 
   const list = S.orders.filter(o => inTab(o, S.tab));
   if (!list.length) {
@@ -124,6 +126,7 @@ function shipInfo(ship) {
     ${ship.partial ? '部分品項已登記出貨' : `已於 <span class="num">${App.esc(ship.date)}</span> 回報出貨`}（${App.esc(ship.by)}）
     ${diff.length ? '<br>' + diff.map(l => has(l) ? `${App.esc(l.name)}：訂 ${l.ordered}，實出 ${l.qty} ${App.esc(l.unit)}`
       : `${App.esc(l.name)}：尚未回報`).join('<br>') : '，數量與採購單相同'}
+    ${ship.pallets !== undefined && ship.pallets !== '' ? `<br>棧板：${App.esc(ship.pallets)} 板` : ''}
     ${ship.note ? `<br>備註：${App.esc(ship.note)}` : ''}</div>`;
 }
 
@@ -146,6 +149,10 @@ function shipForm(o) {
           </div>`).join('')}
       </fieldset>
       <div class="field">
+        <label for="shipPallets">棧板數</label>
+        <input type="number" id="shipPallets" min="0" step="1" inputmode="numeric" required>
+      </div>
+      <div class="field">
         <label for="shipNote">備註（選填，例如車號、物流單號）</label>
         <textarea id="shipNote" rows="2"></textarea>
       </div>
@@ -155,6 +162,42 @@ function shipForm(o) {
       </div>
     </div>`;
 }
+
+/* 棧板：各客戶手上的棧板餘額，收回時在這裡登記 */
+let PAL = null, palOpen = null;
+async function renderPallets() {
+  if (!PAL) {
+    $('orders').innerHTML = '<p class="muted">載入中…</p>';
+    try { PAL = (await App.call('s_pallets')).balances; } catch (e) { $('orders').innerHTML = `<div class="empty">${App.esc(e.message)}</div>`; return; }
+  }
+  if (S.tab !== '棧板') return;
+  $('orders').innerHTML = `<p class="muted">送出板數依你回報出貨時填的棧板數計算。收回棧板後，在客戶下方按「登記收回」。</p>` + (PAL.length ? PAL.map(r => `
+    <article class="ticket">
+      <div class="ticket-head"><span class="ticket-no" style="font-size:17px">${App.esc(r.customerName)}</span><span class="num" style="font-size:20px;font-weight:700">${r.balance} 板</span></div>
+      <p class="muted" style="margin:2px 0 0">送出 ${r.sent}，收回 ${r.returned}${r.adjust ? `，調整 ${r.adjust > 0 ? '+' : ''}${r.adjust}` : ''}${r.lastReturn ? `；最後收回 ${App.esc(r.lastReturn)}` : ''}</p>
+      ${palOpen === r.customerCode ? `
+        <div class="grid2" style="margin-top:10px">
+          <div class="field"><label for="prQty">收回板數</label><input type="number" id="prQty" min="1" max="${r.balance}" step="1" inputmode="numeric"></div>
+          <div class="field"><label for="prDate">收回日期</label><input type="date" id="prDate" value="${App.today(0)}"></div>
+        </div>
+        <div class="field"><label for="prNote">備註（選填）</label><input id="prNote"></div>
+        <div class="actions"><button class="btn btn-primary" data-prsave="${App.esc(r.customerCode)}">確認收回</button><button class="btn btn-ghost" data-prcancel="1">取消</button></div>`
+      : (r.balance > 0 ? `<div class="actions"><button class="btn btn-sm" data-pr="${App.esc(r.customerCode)}">登記收回</button></div>` : '')}
+    </article>`).join('') : '<div class="empty">目前沒有棧板在客戶那裡。</div>');
+}
+
+$('orders').addEventListener('click', async e => {
+  const b = e.target.closest('button');
+  if (!b || S.tab !== '棧板') return;
+  if (b.dataset.pr) { palOpen = b.dataset.pr; renderPallets(); if ($('prQty')) $('prQty').focus(); }
+  else if (b.dataset.prcancel) { palOpen = null; renderPallets(); }
+  else if (b.dataset.prsave) {
+    try {
+      const d = await App.busy(b, '登記中…', () => App.call('s_palletReturn', { customerCode: b.dataset.prsave, qty: $('prQty').value, date: $('prDate').value, note: $('prNote').value }));
+      PAL = d.balances; palOpen = null; renderPallets(); App.toast('已登記收回');
+    } catch (err) { App.toast(err.message, true); }
+  }
+});
 
 $('tabs').addEventListener('click', e => {
   const t = e.target.closest('[data-tab]');
@@ -180,9 +223,11 @@ $('orders').addEventListener('click', async e => {
     const o = S.orders.find(x => x.id === b.dataset.shipSend);
     const lines = [...document.querySelectorAll('[data-sku]')].map(i => ({ sku: i.dataset.sku, qty: i.value }));
     if (lines.some(l => l.qty === '' || !(Number(l.qty) >= 0))) return App.toast('請填寫每個品項的實出數量', true);
+    const pv = $('shipPallets').value;
+    if (pv === '' || !(Number(pv) >= 0) || Math.floor(Number(pv)) !== Number(pv)) return App.toast('請填寫棧板數（0 或正整數）', true);
     if (!confirm(`確定回報 ${o.poNo} 已出貨？回報後無法修改，如有錯誤請聯絡我們。`)) return;
     try {
-      await App.busy(b, '送出中…', () => App.call('s_ship', { id: o.id, version: o.version, shipDate: $('shipDate').value, lines, note: $('shipNote').value }));
+      await App.busy(b, '送出中…', () => App.call('s_ship', { id: o.id, version: o.version, shipDate: $('shipDate').value, lines, pallets: pv, note: $('shipNote').value }));
       S.shipOpen = null;
       App.toast('已回報出貨');
       await load();

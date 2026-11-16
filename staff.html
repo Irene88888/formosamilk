@@ -16,6 +16,7 @@
       <nav class="mode-tabs" id="modeTabs" style="margin:0" hidden>
         <button class="btn btn-sm tab" data-mode="orders" aria-selected="true">訂單</button>
         <button class="btn btn-sm tab" data-mode="sheet" aria-selected="false">廠商訂貨表</button>
+        <button class="btn btn-sm tab" data-mode="pallet" aria-selected="false">棧板</button>
         <button class="btn btn-sm tab" data-mode="accounts" aria-selected="false" id="accTab" hidden>帳號管理</button>
       </nav>
     </div>
@@ -39,6 +40,21 @@
     <div class="split">
       <div class="list" id="list"></div>
       <section class="panel" id="detail"></section>
+    </div>
+  </div>
+
+  <!-- 棧板 -->
+  <div id="palletView" hidden>
+    <div class="split">
+      <section class="panel list" style="padding:12px">
+        <div class="section-head" style="margin:0 0 8px">
+          <h2>棧板餘額</h2>
+          <button id="palRefresh" class="btn btn-ghost btn-sm">重新整理</button>
+        </div>
+        <p class="muted" style="margin-top:0">送出由已出貨訂單的棧板數自動計算；收回與調整在右側登記。</p>
+        <div id="palList"><p class="muted">載入中…</p></div>
+      </section>
+      <section class="panel" id="palDetail"><div class="empty">從左側選一位客戶</div></section>
     </div>
   </div>
 
@@ -142,8 +158,10 @@ function setMode(mode, force) {
   $('ordersView').hidden = mode !== 'orders';
   $('accountsView').hidden = mode !== 'accounts';
   $('sheetView').hidden = mode !== 'sheet';
+  $('palletView').hidden = mode !== 'pallet';
   if (mode === 'orders') renderAll();
   else if (mode === 'sheet') renderSheetForm();
+  else if (mode === 'pallet') loadPallets();
   else loadAccounts();
 }
 $('modeTabs').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
@@ -163,6 +181,7 @@ const inTab = (o, t) => t === '全部' ? true : t === '進行中' ? ACTIVE.inclu
 const hasIssue = o => o.issue && o.issueVersion === o.sentVersion && ACTIVE.includes(o.status);
 
 function flags(o) {
+  if (o.status === '已出貨' && o.pallets === '') return '未填棧板數';
   if (!ACTIVE.includes(o.status)) return '';
   if (o.pending) return o.pending.type === 'cancel' ? '客戶申請取消，待放行' : '客戶申請修改，待放行';
   if (hasIssue(o)) return '廠商回報問題';
@@ -249,7 +268,7 @@ function renderDetail() {
       </div>
       ${p.type === 'edit' && o.sentVersion ? '<span>放行後會成為新版本，記得再按「發送變更」通知廠商。</span>' : ''}</div>`;
   }
-  if (editable && !p) notice += `<p class="muted">客戶自行修改期限：<span class="num">${App.esc(o.lockDate)}</span> 前（出貨前 2 天起需放行）。</p>`;
+  if (editable && !p) notice += `<p class="muted">客戶自行修改期限：<span class="num">${App.esc(o.lockDate)}</span> 前（出貨前 3 天起需放行）；<span class="num">${App.esc(o.autoSendDate)}</span> 早上 8 點自動向廠商下單。</p>`;
   if (hasIssue(o)) notice = `<div class="issue"><strong>廠商回報（第${o.issueVersion}版）：</strong>${App.esc(o.issue)}
       <div class="actions"><button id="clearIssueBtn" class="btn btn-sm">標記已處理</button></div></div>`;
   if (editable && o.sentVersion === 0) notice += '<div class="banner banner-info">還沒發單。指定廠商、確認內容後按「發單」。</div>';
@@ -273,7 +292,7 @@ function renderDetail() {
     </dl>
     ${notice}
     ${editable ? editForm(o) : readonly(o)}
-    ${shipBlock(o.ship)}
+    ${shipBlock(o.ship, o)}
     <div class="actions">${actionButtons(o)}</div>
     ${msgBlock(o)}
     <h3>處理紀錄</h3>
@@ -294,11 +313,15 @@ function msgBlock(o) {
     <div class="actions"><button id="copyMsgBtn" class="btn btn-sm">複製訊息</button></div>`;
 }
 
-function shipBlock(ship) {
+function shipBlock(ship, o) {
   if (!ship) return '';
   return `
     <h3>廠商出貨回報</h3>
-    <dl class="meta">${fact('出貨日', ship.date)}${fact('回報人', ship.by)}${fact('回報時間', ship.at)}</dl>
+    <dl class="meta">${fact('出貨日', ship.date)}${fact('棧板數', o.pallets === '' ? '未填' : o.pallets + ' 板')}${fact('回報人', ship.by)}${fact('回報時間', ship.at)}</dl>
+    <div class="actions" style="margin-bottom:8px">
+      <input id="palletInput" type="number" min="0" step="1" inputmode="numeric" class="erp-input" placeholder="棧板數" aria-label="棧板數" value="${o.pallets === '' ? '' : o.pallets}">
+      <button id="palletBtn" class="btn btn-sm">${o.pallets === '' ? '補登棧板數' : '修改棧板數'}</button>
+    </div>
     ${ship.partial ? '<p class="note">部分品項尚未回報出貨。</p>' : ''}
     <ul class="items">${ship.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${l.qty === null || l.qty === undefined
       ? `訂 ${l.ordered}，尚未回報` : l.qty !== l.ordered ? `訂 ${l.ordered}，<strong>實出 ${l.qty}</strong>` : `${l.qty}`} ${App.esc(l.unit)}</span></li>`).join('')}</ul>
@@ -428,6 +451,7 @@ function bindActions(o) {
     if (reason === null) return;
     doAction(btn, '處理中…', () => App.call('a_reject', { id: o.id, reason }), () => '已退回申請');
   });
+  on('palletBtn', btn => doAction(btn, '儲存中…', () => App.call('a_pallets', { id: o.id, pallets: $('palletInput').value }), () => '棧板數已更新'));
   on('clearIssueBtn', btn => doAction(btn, '處理中…', () => App.call('a_clearIssue', { id: o.id }), () => '已標記處理'));
   on('shipBtn', btn => {
     const warn = o.confirmedVersion < o.sentVersion ? '廠商還沒確認最新版本。' : '';
@@ -793,6 +817,97 @@ function showImport(results, preview, productName, blank) {
       importItems = null;
       showImport(d.results, false, productName, 0);
       App.toast('已寫回系統');
+    } catch (e) { App.toast(e.message, true); }
+  }));
+}
+
+/* ───── 棧板借還帳 ───── */
+const PAL = { list: [], sel: null };
+const palKey = r => r.supplierCode + '|' + r.customerCode;
+
+async function loadPallets() {
+  try {
+    PAL.list = (await App.call('a_palletSummary')).balances;
+    renderPalList();
+    if (PAL.sel) await loadPalDetail();
+  } catch (e) { $('palList').innerHTML = `<p class="muted">${App.esc(e.message)}</p>`; }
+}
+
+function renderPalList() {
+  const custs = (S.palCustomers || []);
+  $('palList').innerHTML = (PAL.list.length ? PAL.list.map(r => `
+    <button class="list-item" data-pal="${App.esc(palKey(r))}" aria-current="${PAL.sel === palKey(r)}">
+      <span class="row"><strong>${App.esc(r.customerName)}</strong><span class="num" style="font-weight:700">${r.balance} 板</span></span>
+      <span class="muted">${App.esc(r.supplierName)}　送出 ${r.sent}／收回 ${r.returned}${r.adjust ? `／調整 ${r.adjust > 0 ? '+' : ''}${r.adjust}` : ''}</span>
+      ${r.lastReturn ? `<span class="muted">最後收回 <span class="num">${App.esc(r.lastReturn)}</span></span>` : ''}
+    </button>`).join('') : '<div class="empty">還沒有任何棧板紀錄。廠商回報出貨並填寫棧板數後會出現在這裡。</div>')
+    + `<details style="margin-top:10px"><summary class="muted">登記其他廠商與客戶</summary>
+        <div class="field" style="margin-top:8px"><label for="palSupNew">廠商</label><select id="palSupNew">${S.suppliers.map(x => `<option value="${App.esc(x.code)}">${App.esc(x.name)}</option>`).join('')}</select></div>
+        <div class="field"><label for="palCustNew">客戶代號</label><input id="palCustNew" placeholder="例如 C001"></div>
+        <button id="palOpenNew" class="btn btn-sm">開啟</button></details>`;
+  $('palOpenNew').addEventListener('click', () => {
+    const k = $('palSupNew').value + '|' + $('palCustNew').value.trim().toUpperCase();
+    if (!/\|.+/.test(k)) return App.toast('請填客戶代號', true);
+    PAL.sel = k; renderPalList(); loadPalDetail();
+  });
+}
+
+$('palList').addEventListener('click', e => {
+  const b = e.target.closest('[data-pal]');
+  if (!b) return;
+  PAL.sel = b.dataset.pal;
+  renderPalList();
+  loadPalDetail();
+  if (window.innerWidth < 900) $('palDetail').scrollIntoView({ behavior: 'smooth' });
+});
+$('palRefresh').addEventListener('click', () => App.busy($('palRefresh'), '載入中…', loadPallets));
+
+async function loadPalDetail() {
+  const [supplierCode, customerCode] = PAL.sel.split('|');
+  $('palDetail').innerHTML = '<p class="muted">載入中…</p>';
+  try {
+    const d = await App.call('a_palletHistory', { supplierCode, customerCode });
+    renderPalDetail(supplierCode, customerCode, d.history);
+  } catch (e) { $('palDetail').innerHTML = `<p class="muted">${App.esc(e.message)}</p>`; }
+}
+
+function renderPalDetail(supplierCode, customerCode, history) {
+  const r = PAL.list.find(x => palKey(x) === PAL.sel) || { supplierName: supName(supplierCode), customerName: customerCode, balance: 0, sent: 0, returned: 0, adjust: 0 };
+  const sign = h => h.type === '收回' ? '−' : h.type === '送出' ? '+' : (h.qty > 0 ? '+' : '−');
+  $('palDetail').innerHTML = `
+    <div class="ticket-head"><span class="ticket-no">${App.esc(r.customerName)}</span><span class="num" style="font-size:20px;font-weight:700">${r.balance} 板</span></div>
+    <p class="muted" style="margin:2px 0 0">${App.esc(r.supplierName)} 的棧板目前在這位客戶那裡的數量</p>
+    <h3>登記</h3>
+    <div class="grid2">
+      <div class="field"><label for="palType">類型</label><select id="palType"><option>收回</option><option>調整</option></select></div>
+      <div class="field"><label for="palDate">日期</label><input type="date" id="palDate" value="${App.today(0)}"></div>
+      <div class="field"><label for="palQty" id="palQtyLabel">收回板數</label><input type="number" id="palQty" step="1" inputmode="numeric"></div>
+      <div class="field"><label for="palNote" id="palNoteLabel">備註（選填）</label><input id="palNote"></div>
+    </div>
+    <div class="actions"><button id="palSave" class="btn btn-primary">登記</button></div>
+    <h3>紀錄</h3>
+    <ul class="log">${history.length ? history.map(h => `
+      <li style="${h.deleted ? 'opacity:.5;text-decoration:line-through' : ''}">
+        <span class="num">${App.esc(h.date)}</span>　<strong>${App.esc(h.type)} ${h.qty === '' ? '?' : sign(h) + Math.abs(h.qty)} 板</strong>　<span class="muted">${App.esc(h.by)}</span>
+        ${h.id && !h.deleted ? `<button class="btn btn-ghost btn-sm" data-paldel="${App.esc(h.id)}" style="float:right">刪除</button>` : ''}
+        ${h.note ? `<pre>${App.esc(h.note)}</pre>` : ''}</li>`).join('') : '<li class="muted">沒有紀錄</li>'}</ul>`;
+  $('palType').addEventListener('change', e => {
+    const adj = e.target.value === '調整';
+    $('palQtyLabel').textContent = adj ? '調整板數（多出填正數，少了填負數）' : '收回板數';
+    $('palNoteLabel').textContent = adj ? '原因（必填，例如盤點差異、破損報廢）' : '備註（選填）';
+  });
+  $('palSave').addEventListener('click', () => App.busy($('palSave'), '登記中…', async () => {
+    try {
+      const d = await App.call('a_palletAdd', { supplierCode, customerCode, type: $('palType').value, qty: $('palQty').value, date: $('palDate').value, note: $('palNote').value });
+      PAL.list = d.balances; renderPalList(); renderPalDetail(supplierCode, customerCode, d.history);
+      App.toast('已登記');
+    } catch (e) { App.toast(e.message, true); }
+  }));
+  $('palDetail').querySelectorAll('[data-paldel]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('刪除這筆紀錄？（會保留刪除記號，不會真的消失）')) return;
+    try {
+      const d = await App.busy(btn, '…', () => App.call('a_palletDelete', { id: btn.dataset.paldel }));
+      PAL.list = d.balances; renderPalList(); renderPalDetail(supplierCode, customerCode, d.history);
     } catch (e) { App.toast(e.message, true); }
   }));
 }
