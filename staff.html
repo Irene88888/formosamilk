@@ -501,6 +501,7 @@ function renderNewOrder() {
     <div class="grid2">
       <div class="field">
         <label for="nCust">客戶</label>
+        ${S.customers.length ? '' : '<p class="flag">客戶清單是空的：請確認 Apps Script 已部署新版 Code.gs，而且試算表「客戶」工作表有填客戶代號和客戶名稱。</p>'}
         <select id="nCust"><option value="">選擇客戶</option>${S.customers.map(c =>
           `<option value="${App.esc(c.code)}">${App.esc(c.name)}</option>`).join('')}</select>
       </div>
