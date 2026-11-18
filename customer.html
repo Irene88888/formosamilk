@@ -124,8 +124,8 @@ function renderOrders() {
           ? `已進入出貨前 3 天，修改或取消需經我們放行。`
           : `<span class="num">${App.esc(o.lockDate)}</span> 起修改需經我們放行；交期提前也需要放行。`}</p>`}
         <div class="actions">
-          <button class="btn btn-sm" data-edit="${App.esc(o.id)}">${o.locked || o.pending ? '申請修改' : '修改'}</button>
-          ${o.pending ? `<button class="btn btn-sm btn-ghost" data-withdraw="${App.esc(o.id)}">撤回申請</button>`
+          <button class="btn btn-sm" data-edit="${App.esc(o.id)}">${o.locked || (o.pending && o.pending.type !== 'new') ? '申請修改' : '修改'}</button>
+          ${o.pending ? `<button class="btn btn-sm btn-ghost" data-withdraw="${App.esc(o.id)}">${o.pending.type === 'new' ? '撤回訂單' : '撤回申請'}</button>`
             : `<button class="btn btn-sm btn-danger" data-cancel="${App.esc(o.id)}">${o.locked || o.status === '已安排出貨' ? '申請取消' : '取消訂單'}</button>`}
         </div>` : ''}
     </article>`).join('');
@@ -134,6 +134,8 @@ function renderOrders() {
 function pendingBox(o) {
   const p = o.pending;
   if (!p) return '';
+  if (p.type === 'new') return `<div class="issue"><strong>訂單待確認</strong>（${App.esc((p.reasons || []).join('、'))}）<br>
+    <span>我們確認後訂單才會成立。你仍可以修改數量，或按「撤回訂單」取消。</span></div>`;
   const what = p.type === 'cancel' ? '取消訂單'
     : `交期 <span class="num">${App.esc(p.deliveryDate)}</span>；${p.lines.map(l => `${App.esc(l.name)} ${l.qty} ${App.esc(l.unit)}`).join('、')}`;
   return `<div class="issue"><strong>申請待放行</strong>（${App.esc((p.reasons || []).join('、'))}）<br>${what}<br>
@@ -145,10 +147,13 @@ $('orders').addEventListener('click', async e => {
   const cancelId = e.target.dataset.cancel;
   const wdId = e.target.dataset.withdraw;
   if (wdId) {
+    const wo = S.orders.find(o => o.id === wdId);
+    const isNew = wo && wo.pending && wo.pending.type === 'new';
+    if (isNew && !confirm(`撤回後訂單 ${wdId} 會取消，確定嗎？`)) return;
     try {
       const d = await App.busy(e.target, '處理中…', () => App.call('c_withdraw', { id: wdId }));
       replaceOrder(d.order);
-      App.toast('已撤回申請');
+      App.toast(isNew ? '訂單已撤回' : '已撤回申請');
     } catch (err) { App.toast(err.message, true); }
     return;
   }
@@ -261,7 +266,7 @@ $('orderForm').addEventListener('submit', async e => {
     const d = await App.call('c_save', { order });
     replaceOrder(d.order);
     S.editing = null;
-    App.toast(d.unchanged ? '內容沒有變更' : d.pending ? `已送出修改申請（${d.reasons.join('、')}），待我們放行` : (d.created ? `訂單 ${d.order.id} 已送出` : '修改已儲存'));
+    App.toast(d.unchanged ? '內容沒有變更' : d.pending && d.created ? `訂單 ${d.order.id} 已送出，${d.reasons.join('、')}，需等我們確認才會成立` : d.pending ? `已送出修改申請（${d.reasons.join('、')}），待我們放行` : (d.created ? `訂單 ${d.order.id} 已送出` : '修改已儲存'));
   } catch (err) {
     pending.remove();
     if (!S.orders.length) renderOrders();

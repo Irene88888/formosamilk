@@ -111,6 +111,10 @@ function showPassword(user) {
 }
 
 async function start() {
+  if (location.hash === '#role') {
+    history.replaceState(null, '', 'index.html');
+    return showLogin('這個帳號不能使用這個頁面。如果剛改過角色，請確認 Apps Script 已用「新版本」重新部署。');
+  }
   if (!App.session) return showLogin();
   try {
     const d = await App.api('me');
