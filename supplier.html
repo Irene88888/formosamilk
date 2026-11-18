@@ -126,7 +126,8 @@ function shipInfo(ship) {
     ${ship.partial ? '部分品項已登記出貨' : `已於 <span class="num">${App.esc(ship.date)}</span> 回報出貨`}（${App.esc(ship.by)}）
     ${diff.length ? '<br>' + diff.map(l => has(l) ? `${App.esc(l.name)}：訂 ${l.ordered}，實出 ${l.qty} ${App.esc(l.unit)}`
       : `${App.esc(l.name)}：尚未回報`).join('<br>') : '，數量與採購單相同'}
-    ${ship.pallets !== undefined && ship.pallets !== '' ? `<br>棧板：${App.esc(ship.pallets)} 板` : ''}
+    ${ship.pallets !== undefined && ship.pallets !== '' ? `<br>出貨棧板：${App.esc(ship.pallets)} 板` : ''}
+    ${ship.returned !== undefined && ship.returned !== '' && ship.returned !== null ? `<br>收回棧板：${App.esc(ship.returned)} 板` : ''}
     ${ship.note ? `<br>備註：${App.esc(ship.note)}` : ''}</div>`;
 }
 
@@ -149,8 +150,12 @@ function shipForm(o) {
           </div>`).join('')}
       </fieldset>
       <div class="field">
-        <label for="shipPallets">棧板數</label>
+        <label for="shipPallets">出貨棧板數</label>
         <input type="number" id="shipPallets" min="0" step="1" inputmode="numeric" required>
+      </div>
+      <div class="field">
+        <label for="shipReturned">收回棧板數（這趟從客戶那裡收回的，沒有填 0）</label>
+        <input type="number" id="shipReturned" min="0" step="1" inputmode="numeric" value="0">
       </div>
       <div class="field">
         <label for="shipNote">備註（選填，例如車號、物流單號）</label>
@@ -171,7 +176,7 @@ async function renderPallets() {
     try { PAL = (await App.call('s_pallets')).balances; } catch (e) { $('orders').innerHTML = `<div class="empty">${App.esc(e.message)}</div>`; return; }
   }
   if (S.tab !== '棧板') return;
-  $('orders').innerHTML = `<p class="muted">送出板數依你回報出貨時填的棧板數計算。收回棧板後，在客戶下方按「登記收回」。</p>` + (PAL.length ? PAL.map(r => `
+  $('orders').innerHTML = `<p class="muted">送出板數依你回報出貨時填的出貨棧板數計算，收回板數包含回報出貨時填的收回棧板數。如果是另外跑一趟收回，在客戶下方按「登記收回」。</p>` + (PAL.length ? PAL.map(r => `
     <article class="ticket">
       <div class="ticket-head"><span class="ticket-no" style="font-size:17px">${App.esc(r.customerName)}</span><span class="num" style="font-size:20px;font-weight:700">${r.balance} 板</span></div>
       <p class="muted" style="margin:2px 0 0">送出 ${r.sent}，收回 ${r.returned}${r.adjust ? `，調整 ${r.adjust > 0 ? '+' : ''}${r.adjust}` : ''}${r.lastReturn ? `；最後收回 ${App.esc(r.lastReturn)}` : ''}</p>
@@ -224,10 +229,12 @@ $('orders').addEventListener('click', async e => {
     const lines = [...document.querySelectorAll('[data-sku]')].map(i => ({ sku: i.dataset.sku, qty: i.value }));
     if (lines.some(l => l.qty === '' || !(Number(l.qty) >= 0))) return App.toast('請填寫每個品項的實出數量', true);
     const pv = $('shipPallets').value;
-    if (pv === '' || !(Number(pv) >= 0) || Math.floor(Number(pv)) !== Number(pv)) return App.toast('請填寫棧板數（0 或正整數）', true);
+    if (pv === '' || !(Number(pv) >= 0) || Math.floor(Number(pv)) !== Number(pv)) return App.toast('請填寫出貨棧板數（0 或正整數）', true);
+    const rv = $('shipReturned').value;
+    if (rv !== '' && (!(Number(rv) >= 0) || Math.floor(Number(rv)) !== Number(rv))) return App.toast('收回棧板數要是 0 或正整數', true);
     if (!confirm(`確定回報 ${o.poNo} 已出貨？回報後無法修改，如有錯誤請聯絡我們。`)) return;
     try {
-      await App.busy(b, '送出中…', () => App.call('s_ship', { id: o.id, version: o.version, shipDate: $('shipDate').value, lines, pallets: pv, note: $('shipNote').value }));
+      await App.busy(b, '送出中…', () => App.call('s_ship', { id: o.id, version: o.version, shipDate: $('shipDate').value, lines, pallets: pv, returned: rv, note: $('shipNote').value }));
       S.shipOpen = null;
       App.toast('已回報出貨');
       await load();
