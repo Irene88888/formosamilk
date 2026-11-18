@@ -15,7 +15,7 @@
       <h1>後台</h1>
       <nav class="mode-tabs" id="modeTabs" style="margin:0" hidden>
         <button class="btn btn-sm tab" data-mode="orders" aria-selected="true">訂單</button>
-        <button class="btn btn-sm tab" data-mode="sheet" aria-selected="false">廠商訂貨表</button>
+        <button class="btn btn-sm tab" data-mode="sheet" aria-selected="false" id="sheetTab" hidden>廠商訂貨表</button>
         <button class="btn btn-sm tab" data-mode="pallet" aria-selected="false">棧板</button>
         <button class="btn btn-sm tab" data-mode="accounts" aria-selected="false" id="accTab" hidden>帳號管理</button>
       </nav>
@@ -124,6 +124,12 @@
 <script>
 const $ = id => document.getElementById(id);
 const ACTIVE = ['待確認', '已叫貨', '廠商已確認'];
+const INTERNAL = ['系統管理員', 'Boss', '員工'];
+const ROLE_NOTE = {
+  '系統管理員': '可以使用全部功能：訂單、廠商訂貨表、棧板、帳號管理。',
+  'Boss': '可以看訂單、廠商訂貨表、棧板，不能管理帳號。',
+  '員工': '只能看訂單和棧板。',
+};
 const TABS = ['進行中', '待確認', '已叫貨', '廠商已確認', '已出貨', '已取消', '全部'];
 const CHIP = { '待確認': 'pending', '已叫貨': 'sent', '廠商已確認': 'ok', '已出貨': 'done', '已取消': 'stop' };
 const S = { me: null, orders: [], suppliers: [], products: [], testMode: false, tab: '進行中', selected: null, dirty: false, mode: 'orders', acc: null, newRole: '客戶' };
@@ -139,6 +145,8 @@ async function init() {
     App.setWho(S.me.name);
     $('modeTabs').hidden = false;
     $('accTab').hidden = !S.me.isAdmin;
+    $('sheetTab').hidden = !S.me.canSheet; // 系統管理員、Boss 才看得到廠商訂貨表；員工只看訂單和棧板
+    if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin)) S.mode = 'orders';
     $('testBanner').hidden = !S.testMode;
     if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
     setMode(S.mode, true);
@@ -498,19 +506,19 @@ async function loadAccounts() {
 
 function renderAccounts() {
   const A = S.acc;
-  const order = { '員工': 0, '客戶': 1, '廠商': 2 };
+  const order = { '系統管理員': 0, 'Boss': 1, '員工': 2, '客戶': 3, '廠商': 4 };
   const list = A.accounts.slice().sort((a, b) => (order[a.role] - order[b.role]) || a.username.localeCompare(b.username));
   $('accList').innerHTML = list.map(a => `
     <li>
       <div class="acc-main">
         <strong>${App.esc(a.username)}</strong>　${App.esc(a.name)}
-        <span class="chip chip-${a.role === '員工' ? 'sent' : a.role === '客戶' ? 'ok' : 'pending'}">${a.role}${a.isAdmin ? '・管理帳號' : ''}</span>
+        <span class="chip chip-${INTERNAL.includes(a.role) ? 'sent' : a.role === '客戶' ? 'ok' : 'pending'}">${a.role}</span>
         ${a.active ? '' : '<span class="chip chip-stop">已停用</span>'}
         <div class="muted">${a.refName ? `${App.esc(a.refName)}（${App.esc(a.ref)}），` : ''}${a.mustChange ? '尚未設定自己的密碼，' : ''}最後登入 ${App.esc(a.lastLogin || '從未')}</div>
       </div>
       <div class="acc-actions">
         <button class="btn btn-sm" data-reset="${App.esc(a.username)}">重設密碼</button>
-        ${a.role === '員工' && a.username !== S.me.username ? `<button class="btn btn-sm" data-admin="${App.esc(a.username)}" data-val="${a.isAdmin ? '0' : '1'}">${a.isAdmin ? '取消管理權限' : '給管理權限'}</button>` : ''}
+        ${INTERNAL.includes(a.role) && a.username !== S.me.username ? `<select class="btn-sm" data-role-for="${App.esc(a.username)}" aria-label="${App.esc(a.username)} 的角色">${INTERNAL.map(x => `<option ${x === a.role ? 'selected' : ''}>${x}</option>`).join('')}</select>` : ''}
         ${a.username !== S.me.username ? `<button class="btn btn-sm ${a.active ? 'btn-danger' : ''}" data-active="${App.esc(a.username)}" data-val="${a.active ? '0' : '1'}">${a.active ? '停用' : '啟用'}</button>` : ''}
       </div>
     </li>`).join('');
@@ -538,9 +546,6 @@ $('accList').addEventListener('click', async e => {
       const d = await App.busy(b, '處理中…', () => App.call('acc_reset', { username: b.dataset.reset }));
       S.acc = d.list; renderAccounts();
       showSecret(d.username, d.tempPassword, '密碼已重設');
-    } else if (b.dataset.admin) {
-      const d = await App.busy(b, '處理中…', () => App.call('acc_update', { username: b.dataset.admin, isAdmin: b.dataset.val === '1' }));
-      S.acc = d.list; renderAccounts(); App.toast('已更新');
     } else if (b.dataset.active) {
       const on = b.dataset.val === '1';
       if (!on && !confirm(`停用 ${b.dataset.active}？停用後對方會立即無法使用。`)) return;
@@ -548,6 +553,18 @@ $('accList').addEventListener('click', async e => {
       S.acc = d.list; renderAccounts(); App.toast(on ? '已啟用' : '已停用');
     }
   } catch (err) { App.toast(err.message, true); }
+});
+
+$('accList').addEventListener('change', async e => {
+  const sel = e.target.closest('[data-role-for]');
+  if (!sel) return;
+  const username = sel.dataset.roleFor, role = sel.value;
+  if (!confirm(`把 ${username} 改成「${role}」？`)) { renderAccounts(); return; }
+  sel.disabled = true;
+  try {
+    const d = await App.call('acc_update', { username, role });
+    S.acc = d.list; renderAccounts(); App.toast('角色已更新');
+  } catch (err) { App.toast(err.message, true); renderAccounts(); }
 });
 
 $('groupRows').addEventListener('click', async e => {
@@ -569,7 +586,7 @@ function showSecret(username, pw, title) {
   p.hidden = false;
   p.innerHTML = `
     <div class="banner banner-info">
-      <strong>${App.esc(title)}</strong>：請把臨時密碼交給對方（客戶、廠商登入要輸入帳號和密碼；員工選「員工」後只要輸入密碼），第一次登入時會要求改成自己的密碼。這組密碼只會顯示這一次。
+      <strong>${App.esc(title)}</strong>：請把臨時密碼交給對方（客戶、廠商登入要輸入帳號和密碼；系統管理員、Boss、員工選「公司人員」後只要輸入密碼），第一次登入時會要求改成自己的密碼。這組密碼只會顯示這一次。
       <div>帳號 <span class="secret">${App.esc(username)}</span></div>
       <div>臨時密碼 <span class="secret">${App.esc(pw)}</span></div>
       <div class="actions"><button class="btn btn-sm" id="hideSecret">我已記下</button></div>
@@ -593,16 +610,16 @@ function renderNewAcc() {
       <div class="grid2">
         <div class="field">
           <label for="nRole">角色</label>
-          <select id="nRole">${['客戶', '廠商', '員工'].map(x => `<option ${x === r ? 'selected' : ''}>${x}</option>`).join('')}</select>
+          <select id="nRole">${['客戶', '廠商', ...INTERNAL].map(x => `<option ${x === r ? 'selected' : ''}>${x}</option>`).join('')}</select>
         </div>
         <div class="field">
           <label for="nUser">帳號（英文小寫、數字）</label>
           <input id="nUser" autocapitalize="none" spellcheck="false" placeholder="例如 harbor01">
         </div>
       </div>
-      ${r === '員工' ? `
+      ${INTERNAL.includes(r) ? `
         <div class="field"><label for="nName">姓名</label><input id="nName"></div>
-        <label class="check field"><input type="checkbox" id="nAdmin"> 可以管理帳號</label>` : `
+        <p class="muted">${ROLE_NOTE[r]}</p>` : `
         <div class="field">
           <label for="nRef">對應的${r}</label>
           <select id="nRef">
@@ -632,7 +649,7 @@ function renderNewAcc() {
   $('closeNewAcc').addEventListener('click', () => { $('newAccPanel').hidden = true; });
   $('createAccBtn').addEventListener('click', async () => {
     const v = id => ($(id) ? $(id).value.trim() : '');
-    const payload = { role: r, username: v('nUser'), name: v('nName'), isAdmin: $('nAdmin') ? $('nAdmin').checked : false, ref: v('nRef') };
+    const payload = { role: r, username: v('nUser'), name: v('nName'), ref: v('nRef') };
     if (r === '客戶' && !payload.ref) payload.newCustomer = { name: v('nCName'), address: v('nCAddr'), contact: v('nCContact'), phone: v('nCPhone') };
     if (r === '廠商' && !payload.ref) payload.newSupplier = { name: v('nSName') };
     try {

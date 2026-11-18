@@ -13,7 +13,7 @@ const App = {
   clearSession() {
     try { localStorage.removeItem(this.SESSION_KEY); localStorage.removeItem(this.USER_KEY); } catch (e) { /* 忽略 */ }
   },
-  homeFor(role) { return { '員工': 'staff.html', '客戶': 'customer.html', '廠商': 'supplier.html' }[role] || 'index.html'; },
+  homeFor(role) { return { '系統管理員': 'staff.html', 'Boss': 'staff.html', '員工': 'staff.html', '客戶': 'customer.html', '廠商': 'supplier.html' }[role] || 'index.html'; },
 
   /** 呼叫後端；失敗時丟出錯誤（err.auth 表示登入問題） */
   async api(action, payload = {}) {
