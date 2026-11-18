@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="shell"><h1 data-app-title>直送訂單系統</h1></div>
+  <div class="shell"><h1 data-app-title>永鮮x福爾摩沙 訂單系統</h1></div>
 </header>
 
 <main class="shell">
@@ -16,10 +16,14 @@
 
   <section id="loginPanel" class="panel login" hidden>
     <h2>登入</h2>
-    <p class="muted">使用我們提供的帳號登入。客戶、廠商、員工都從這裡進入。</p>
+    <div class="tabs" role="tablist" aria-label="登入身分">
+      <button type="button" class="btn btn-sm tab" role="tab" data-mode="partner" aria-selected="true">客戶／廠商</button>
+      <button type="button" class="btn btn-sm tab" role="tab" data-mode="staff" aria-selected="false">員工</button>
+    </div>
+    <p id="loginHint" class="muted"></p>
     <div id="loginError" class="banner banner-error" hidden></div>
     <form id="loginForm">
-      <div class="field">
+      <div class="field" id="userField">
         <label for="username">帳號</label>
         <input id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
       </div>
@@ -71,11 +75,28 @@ function show(id) {
   ['loading', 'loginPanel', 'pwPanel'].forEach(x => { $(x).hidden = x !== id; });
 }
 
+// 客戶／廠商：帳號＋密碼；員工：只輸入密碼
+let mode = localStorage.getItem('loginMode') === 'staff' ? 'staff' : 'partner';
+
+function setMode(m) {
+  mode = m;
+  try { localStorage.setItem('loginMode', m); } catch (e) { /* 無法記住也沒關係 */ }
+  document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-selected', b.dataset.mode === m));
+  const staff = m === 'staff';
+  $('userField').hidden = staff;
+  $('username').required = !staff;
+  $('loginHint').textContent = staff ? '員工請直接輸入自己的密碼。' : '請輸入我們提供的帳號和密碼。';
+  $('loginError').hidden = true;
+  (staff || $('username').value ? $('password') : $('username')).focus();
+}
+
+document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
 function showLogin(msg) {
   show('loginPanel');
+  setMode(mode);
   $('loginError').hidden = !msg;
   $('loginError').textContent = msg || '';
-  $('username').focus();
 }
 
 function showPassword(user) {
@@ -105,15 +126,16 @@ $('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   $('loginError').hidden = true;
   try {
-    const d = await App.busy($('loginBtn'), '登入中…', () => App.api('login', {
-      username: $('username').value.trim(), password: $('password').value,
-    }));
+    const d = await App.busy($('loginBtn'), '登入中…', () => App.api('login', mode === 'staff'
+      ? { staff: true, password: $('password').value }
+      : { username: $('username').value.trim(), password: $('password').value }));
     App.setSession(d.session, d.user);
     if (d.user.mustChange) showPassword(d.user);
     else location.replace(App.homeFor(d.user.role));
   } catch (err) {
     $('loginError').textContent = err.message;
     $('loginError').hidden = false;
+    $('password').select();
   }
 });
 

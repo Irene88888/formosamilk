@@ -58,7 +58,10 @@ const App = {
   /** 頁首：顯示登入者、修改密碼、登出 */
   header() {
     const t = (window.APP_CONFIG || {}).TITLE;
-    if (t) document.querySelectorAll('[data-app-title]').forEach(el => { el.textContent = t; });
+    if (t) {
+      document.querySelectorAll('[data-app-title]').forEach(el => { el.textContent = t; });
+      if (document.title.indexOf(t) < 0) document.title = document.title ? `${document.title}｜${t}` : t;
+    }
     const el = document.getElementById('who');
     const u = App.user;
     if (!el) return;
