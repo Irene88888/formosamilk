@@ -35,7 +35,10 @@
     </div>
     <div class="section-head">
       <nav class="tabs" id="tabs" role="tablist" aria-label="依狀態篩選" style="margin:0"></nav>
-      <button id="refreshBtn" class="btn btn-ghost btn-sm">重新整理</button>
+      <span>
+        <button id="newOrderBtn" class="btn btn-primary btn-sm" hidden>新增訂單</button>
+        <button id="refreshBtn" class="btn btn-ghost btn-sm">重新整理</button>
+      </span>
     </div>
     <div class="split">
       <div class="list" id="list"></div>
@@ -133,7 +136,7 @@ const ROLE_NOTE = {
 };
 const TABS = ['進行中', '待確認', '已叫貨', '廠商已確認', '已出貨', '已取消', '全部'];
 const CHIP = { '待確認': 'pending', '已叫貨': 'sent', '廠商已確認': 'ok', '已出貨': 'done', '已取消': 'stop' };
-const S = { me: null, orders: [], suppliers: [], products: [], testMode: false, tab: '進行中', selected: null, dirty: false, mode: 'orders', acc: null, newRole: '客戶' };
+const S = { me: null, orders: [], suppliers: [], products: [], customers: [], creating: false, testMode: false, tab: '進行中', selected: null, dirty: false, mode: 'orders', acc: null, newRole: '客戶' };
 
 App.header();
 
@@ -146,6 +149,7 @@ async function init() {
     App.setWho(S.me.name);
     $('modeTabs').hidden = false;
     $('accTab').hidden = !S.me.isAdmin;
+    $('newOrderBtn').hidden = !S.me.canSheet; // 只有系統管理員可以代客新增訂單
     $('sheetTab').hidden = !S.me.canSheet; // 只有系統管理員看得到廠商訂貨表；Boss、員工只看訂單和棧板
     if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin)) S.mode = 'orders';
     $('testBanner').hidden = !S.testMode;
@@ -239,6 +243,7 @@ $('list').addEventListener('click', e => {
   if (!b || b.dataset.id === S.selected) return;
   if (S.dirty && !confirm('有未儲存的修改，確定要切換訂單？')) return;
   S.selected = b.dataset.id;
+  S.creating = false;
   S.dirty = false;
   renderList(); renderDetail();
   if (window.innerWidth < 900) $('detail').scrollIntoView({ behavior: 'smooth' });
@@ -248,6 +253,7 @@ $('list').addEventListener('click', e => {
 const fact = (label, value) => `<div><dt>${label}</dt><dd>${App.esc(value)}</dd></div>`;
 
 function renderDetail() {
+  if (S.creating) return renderNewOrder();
   const o = cur();
   if (!o) { $('detail').innerHTML = '<div class="empty">從列表選一張訂單</div>'; return; }
   const editable = ACTIVE.includes(o.status);
@@ -475,6 +481,92 @@ function bindActions(o) {
     const msg = o.sentVersion ? `確定取消 ${o.id}？系統會通知廠商這張採購單已取消。` : `確定取消 ${o.id}？`;
     if (!confirm(msg)) return;
     doAction(btn, '取消中…', () => App.call('a_cancel', { id: o.id, version: o.version }), () => '訂單已取消');
+  });
+}
+
+/* ───── 訂單：系統管理員代客新增 ───── */
+$('newOrderBtn').addEventListener('click', () => {
+  if (S.dirty && !confirm('有未儲存的修改，確定要離開？')) return;
+  S.creating = true;
+  S.selected = null;
+  S.dirty = false;
+  renderList(); renderDetail();
+  if (window.innerWidth < 900) $('detail').scrollIntoView({ behavior: 'smooth' });
+});
+
+function renderNewOrder() {
+  $('detail').innerHTML = `
+    <div class="row"><h2 style="margin:0">新增訂單</h2></div>
+    <p class="muted">規則和客戶自己下單一樣：交期最早 2 天後；總數量不在 3500～6500 瓶需放行；已到自動下單日會直接發給廠商。</p>
+    <div class="grid2">
+      <div class="field">
+        <label for="nCust">客戶</label>
+        <select id="nCust"><option value="">選擇客戶</option>${S.customers.map(c =>
+          `<option value="${App.esc(c.code)}">${App.esc(c.name)}</option>`).join('')}</select>
+      </div>
+      <div class="field">
+        <label for="nDate">交期</label>
+        <input type="date" id="nDate" value="${App.today(2)}" min="${App.today(2)}">
+      </div>
+    </div>
+    <div class="field">
+      <label for="nAddr">送貨地址（選客戶後自動帶入）</label>
+      <input id="nAddr">
+    </div>
+    <fieldset class="field">
+      <legend>品項</legend>
+      <div id="nLines"></div>
+      <button type="button" id="nAdd" class="btn btn-ghost btn-sm">加一個品項</button>
+    </fieldset>
+    <div class="field">
+      <label for="nNote">備註（會出現在給廠商的訊息上）</label>
+      <textarea id="nNote" rows="2"></textarea>
+    </div>
+    <div class="actions">
+      <button id="nSave" class="btn btn-primary">建立訂單</button>
+      <button id="nCancel" class="btn btn-ghost">取消</button>
+    </div>`;
+  const box = $('nLines');
+  const addRow = () => {
+    const row = document.createElement('div');
+    row.className = 'line-row';
+    row.innerHTML = `
+      <select aria-label="品項"><option value="">選擇品項</option>${S.products.map(p =>
+        `<option value="${App.esc(p.sku)}">${App.esc(p.name)}</option>`).join('')}</select>
+      <input type="number" class="qty" inputmode="decimal" min="0" step="any" aria-label="數量">
+      <span class="unit"></span>
+      <button type="button" class="btn btn-ghost btn-sm" aria-label="移除這個品項">移除</button>`;
+    row.querySelector('select').addEventListener('change', e => { row.querySelector('.unit').textContent = unitOf(e.target.value); });
+    row.querySelector('button').addEventListener('click', () => { row.remove(); if (!box.children.length) addRow(); });
+    box.appendChild(row);
+  };
+  addRow();
+  $('nAdd').addEventListener('click', addRow);
+  $('nCust').addEventListener('change', e => {
+    const c = S.customers.find(x => x.code === e.target.value);
+    if (c) $('nAddr').value = c.address || '';
+  });
+  ['nCust', 'nDate', 'nAddr', 'nNote'].forEach(id => $(id).addEventListener('input', () => { S.dirty = true; }));
+  box.addEventListener('input', () => { S.dirty = true; });
+  $('nCancel').addEventListener('click', () => { S.creating = false; S.dirty = false; renderDetail(); });
+  $('nSave').addEventListener('click', async () => {
+    if (!$('nCust').value) return App.toast('請選擇客戶', true);
+    try {
+      const d = await App.busy($('nSave'), '建立中…', () => App.call('a_create', {
+        customerCode: $('nCust').value,
+        deliveryDate: $('nDate').value,
+        address: $('nAddr').value.trim(),
+        note: $('nNote').value.trim(),
+        lines: [...box.children].map(r => ({ sku: r.querySelector('select').value, qty: r.querySelector('.qty').value })).filter(l => l.sku || l.qty),
+      }));
+      replaceOrder(d.order);
+      S.creating = false;
+      S.dirty = false;
+      S.selected = d.order.id;
+      S.tab = '進行中';
+      renderAll();
+      App.toast(d.pending ? `已建立 ${d.order.id}，${d.reasons.join('、')}，需放行` : `已建立 ${d.order.id}`);
+    } catch (e) { App.toast(e.message, true); }
   });
 }
 
