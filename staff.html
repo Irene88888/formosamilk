@@ -127,7 +127,7 @@ const ACTIVE = ['待確認', '已叫貨', '廠商已確認'];
 const INTERNAL = ['系統管理員', 'Boss', '員工'];
 const ROLE_NOTE = {
   '系統管理員': '可以使用全部功能：訂單、廠商訂貨表、棧板、帳號管理。',
-  'Boss': '可以看訂單、廠商訂貨表、棧板，不能管理帳號。',
+  'Boss': '只能看訂單和棧板。',
   '員工': '只能看訂單和棧板。',
 };
 const TABS = ['進行中', '待確認', '已叫貨', '廠商已確認', '已出貨', '已取消', '全部'];
@@ -145,7 +145,7 @@ async function init() {
     App.setWho(S.me.name);
     $('modeTabs').hidden = false;
     $('accTab').hidden = !S.me.isAdmin;
-    $('sheetTab').hidden = !S.me.canSheet; // 系統管理員、Boss 才看得到廠商訂貨表；員工只看訂單和棧板
+    $('sheetTab').hidden = !S.me.canSheet; // 只有系統管理員看得到廠商訂貨表；Boss、員工只看訂單和棧板
     if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin)) S.mode = 'orders';
     $('testBanner').hidden = !S.testMode;
     if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
