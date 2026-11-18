@@ -202,9 +202,9 @@ function openForm(o) {
     : o.locked ? '已進入出貨前 3 天，送出後需經我們放行才會生效。'
     : `${o.lockDate} 前可以直接修改；交期往前提需經我們放行。`;
   $('submitBtn').textContent = o ? '儲存修改' : '送出訂單';
-  // 新訂單：交期最早為 3 天後（D+3）
-  $('fDate').value = o ? o.deliveryDate : App.today(3);
-  $('fDate').min = o ? App.today(0) : App.today(3);
+  // 新訂單：交期最早為 2 天後（D+2）
+  $('fDate').value = o ? o.deliveryDate : App.today(2);
+  $('fDate').min = o ? App.today(0) : App.today(2);
   $('fAddr').value = o ? o.address : (S.customer.address || '');
   $('fNote').value = o ? o.note : '';
   $('lineRows').innerHTML = '';
