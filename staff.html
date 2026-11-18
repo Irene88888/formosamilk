@@ -125,6 +125,7 @@
 const $ = id => document.getElementById(id);
 const ACTIVE = ['待確認', '已叫貨', '廠商已確認'];
 const INTERNAL = ['系統管理員', 'Boss', '員工'];
+const FIXED_PW = ['Boss', '員工']; // 密碼由系統管理員直接指定
 const ROLE_NOTE = {
   '系統管理員': '可以使用全部功能：訂單、廠商訂貨表、棧板、帳號管理。',
   'Boss': '只能看訂單和棧板。',
@@ -517,7 +518,9 @@ function renderAccounts() {
         <div class="muted">${a.refName ? `${App.esc(a.refName)}（${App.esc(a.ref)}），` : ''}${a.mustChange ? '尚未設定自己的密碼，' : ''}最後登入 ${App.esc(a.lastLogin || '從未')}</div>
       </div>
       <div class="acc-actions">
-        <button class="btn btn-sm" data-reset="${App.esc(a.username)}">重設密碼</button>
+        ${FIXED_PW.includes(a.role)
+          ? `<button class="btn btn-sm" data-setpw="${App.esc(a.username)}">指定密碼</button>`
+          : `<button class="btn btn-sm" data-reset="${App.esc(a.username)}">重設密碼</button>`}
         ${INTERNAL.includes(a.role) && a.username !== S.me.username ? `<select class="btn-sm" data-role-for="${App.esc(a.username)}" aria-label="${App.esc(a.username)} 的角色">${INTERNAL.map(x => `<option ${x === a.role ? 'selected' : ''}>${x}</option>`).join('')}</select>` : ''}
         ${a.username !== S.me.username ? `<button class="btn btn-sm ${a.active ? 'btn-danger' : ''}" data-active="${App.esc(a.username)}" data-val="${a.active ? '0' : '1'}">${a.active ? '停用' : '啟用'}</button>` : ''}
       </div>
@@ -541,7 +544,9 @@ $('accList').addEventListener('click', async e => {
   const b = e.target.closest('button');
   if (!b) return;
   try {
-    if (b.dataset.reset) {
+    if (b.dataset.setpw) {
+      showSetPw(b.dataset.setpw);
+    } else if (b.dataset.reset) {
       if (!confirm(`重設 ${b.dataset.reset} 的密碼？對方下次登入要用新的臨時密碼。`)) return;
       const d = await App.busy(b, '處理中…', () => App.call('acc_reset', { username: b.dataset.reset }));
       S.acc = d.list; renderAccounts();
@@ -581,12 +586,37 @@ $('groupRows').addEventListener('click', async e => {
   } catch (err) { App.toast(err.message, true); }
 });
 
+function showSetPw(username) {
+  const p = $('secretPanel');
+  p.hidden = false;
+  p.innerHTML = `
+    <div class="banner banner-info">
+      <strong>指定 ${App.esc(username)} 的密碼</strong>：對方選「公司人員」後輸入這組密碼就能登入。至少 6 個字元，不能和其他公司人員相同。
+      <div class="field"><label for="setPwInput">新密碼</label><input id="setPwInput" autocomplete="off" spellcheck="false"></div>
+      <div class="actions">
+        <button class="btn btn-primary btn-sm" id="setPwSave">儲存</button>
+        <button class="btn btn-ghost btn-sm" id="setPwCancel">取消</button>
+      </div>
+    </div>`;
+  $('setPwCancel').addEventListener('click', () => { p.hidden = true; p.innerHTML = ''; });
+  $('setPwSave').addEventListener('click', async () => {
+    try {
+      const d = await App.busy($('setPwSave'), '儲存中…', () => App.call('acc_reset', { username, password: $('setPwInput').value }));
+      S.acc = d.list; renderAccounts();
+      p.hidden = true; p.innerHTML = '';
+      App.toast('密碼已更新');
+    } catch (err) { App.toast(err.message, true); }
+  });
+  p.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('setPwInput').focus();
+}
+
 function showSecret(username, pw, title) {
   const p = $('secretPanel');
   p.hidden = false;
   p.innerHTML = `
     <div class="banner banner-info">
-      <strong>${App.esc(title)}</strong>：請把臨時密碼交給對方（客戶、廠商登入要輸入帳號和密碼；系統管理員、Boss、員工選「公司人員」後只要輸入密碼），第一次登入時會要求改成自己的密碼。這組密碼只會顯示這一次。
+      <strong>${App.esc(title)}</strong>：請把臨時密碼交給對方（客戶、廠商登入要輸入帳號和密碼；系統管理員選「公司人員」後只要輸入密碼），第一次登入時會要求改成自己的密碼。這組密碼只會顯示這一次。
       <div>帳號 <span class="secret">${App.esc(username)}</span></div>
       <div>臨時密碼 <span class="secret">${App.esc(pw)}</span></div>
       <div class="actions"><button class="btn btn-sm" id="hideSecret">我已記下</button></div>
@@ -619,6 +649,7 @@ function renderNewAcc() {
       </div>
       ${INTERNAL.includes(r) ? `
         <div class="field"><label for="nName">姓名</label><input id="nName"></div>
+        ${FIXED_PW.includes(r) ? `<div class="field"><label for="nPw">密碼（至少 6 個字元，不能和其他公司人員相同）</label><input id="nPw" autocomplete="off" spellcheck="false"></div>` : ''}
         <p class="muted">${ROLE_NOTE[r]}</p>` : `
         <div class="field">
           <label for="nRef">對應的${r}</label>
@@ -649,7 +680,7 @@ function renderNewAcc() {
   $('closeNewAcc').addEventListener('click', () => { $('newAccPanel').hidden = true; });
   $('createAccBtn').addEventListener('click', async () => {
     const v = id => ($(id) ? $(id).value.trim() : '');
-    const payload = { role: r, username: v('nUser'), name: v('nName'), ref: v('nRef') };
+    const payload = { role: r, username: v('nUser'), name: v('nName'), ref: v('nRef'), password: $('nPw') ? $('nPw').value : '' };
     if (r === '客戶' && !payload.ref) payload.newCustomer = { name: v('nCName'), address: v('nCAddr'), contact: v('nCContact'), phone: v('nCPhone') };
     if (r === '廠商' && !payload.ref) payload.newSupplier = { name: v('nSName') };
     try {
@@ -658,7 +689,8 @@ function renderNewAcc() {
       S.suppliers = d.list.suppliers.map(s => ({ code: s.code, name: s.name, hasGroup: !!s.groupId }));
       $('newAccPanel').hidden = true;
       renderAccounts();
-      showSecret(d.created.username, d.created.tempPassword, '帳號已建立');
+      if (d.created.fixed) App.toast('帳號已建立，請把密碼告訴對方');
+      else showSecret(d.created.username, d.created.tempPassword, '帳號已建立');
     } catch (err) { App.toast(err.message, true); }
   });
   $('nUser').focus();

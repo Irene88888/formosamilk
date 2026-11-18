@@ -67,7 +67,7 @@ const App = {
     if (!el) return;
     if (!App.session) { location.href = 'index.html'; return; }
     el.innerHTML = `<span id="whoName">${App.esc(u ? (u.refName || u.name) : '')}</span>
-      <a href="index.html#password">修改密碼</a>
+      ${u && ['Boss', '員工'].includes(u.role) ? '' : '<a href="index.html#password">修改密碼</a>'}
       <button class="btn btn-ghost btn-sm" id="logoutBtn">登出</button>`;
     document.getElementById('logoutBtn').addEventListener('click', App.logout);
   },
