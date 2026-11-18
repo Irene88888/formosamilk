@@ -51,7 +51,7 @@
           <h2>棧板餘額</h2>
           <button id="palRefresh" class="btn btn-ghost btn-sm">重新整理</button>
         </div>
-        <p class="muted" style="margin-top:0">送出由已出貨訂單的棧板數自動計算；收回與調整在右側登記。</p>
+        <p class="muted" style="margin-top:0">送出＝已出貨訂單的出貨棧板數；收回＝訂單上的收回棧板數＋右側另外登記的收回；餘額＝還在客戶那裡的板數。</p>
         <div id="palList"><p class="muted">載入中…</p></div>
       </section>
       <section class="panel" id="palDetail"><div class="empty">從左側選一位客戶</div></section>
@@ -190,7 +190,7 @@ const inTab = (o, t) => t === '全部' ? true : t === '進行中' ? ACTIVE.inclu
 const hasIssue = o => o.issue && o.issueVersion === o.sentVersion && ACTIVE.includes(o.status);
 
 function flags(o) {
-  if (o.status === '已出貨' && o.pallets === '') return '未填棧板數';
+  if (o.status === '已出貨' && o.pallets === '') return '未填出貨棧板數';
   if (!ACTIVE.includes(o.status)) return '';
   if (o.pending) return o.pending.type === 'new' ? '新訂單待放行' : o.pending.type === 'cancel' ? '客戶申請取消，待放行' : '客戶申請修改，待放行';
   if (hasIssue(o)) return '廠商回報問題';
@@ -328,10 +328,11 @@ function shipBlock(ship, o) {
   if (!ship) return '';
   return `
     <h3>廠商出貨回報</h3>
-    <dl class="meta">${fact('出貨日', ship.date)}${fact('棧板數', o.pallets === '' ? '未填' : o.pallets + ' 板')}${fact('回報人', ship.by)}${fact('回報時間', ship.at)}</dl>
+    <dl class="meta">${fact('出貨日', ship.date)}${fact('出貨棧板數', o.pallets === '' ? '未填' : o.pallets + ' 板')}${fact('收回棧板數', o.returned === '' || o.returned === undefined ? '未填' : o.returned + ' 板')}${fact('回報人', ship.by)}${fact('回報時間', ship.at)}</dl>
     <div class="actions" style="margin-bottom:8px">
-      <input id="palletInput" type="number" min="0" step="1" inputmode="numeric" class="erp-input" placeholder="棧板數" aria-label="棧板數" value="${o.pallets === '' ? '' : o.pallets}">
-      <button id="palletBtn" class="btn btn-sm">${o.pallets === '' ? '補登棧板數' : '修改棧板數'}</button>
+      <input id="palletInput" type="number" min="0" step="1" inputmode="numeric" class="erp-input" placeholder="出貨棧板數" aria-label="出貨棧板數" value="${o.pallets === '' ? '' : o.pallets}">
+      <input id="returnInput" type="number" min="0" step="1" inputmode="numeric" class="erp-input" placeholder="收回棧板數" aria-label="收回棧板數" value="${o.returned === '' || o.returned === undefined ? '' : o.returned}">
+      <button id="palletBtn" class="btn btn-sm">儲存棧板數</button>
     </div>
     ${ship.partial ? '<p class="note">部分品項尚未回報出貨。</p>' : ''}
     <ul class="items">${ship.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${l.qty === null || l.qty === undefined
@@ -463,7 +464,7 @@ function bindActions(o) {
     if (reason === null) return;
     doAction(btn, '處理中…', () => App.call('a_reject', { id: o.id, reason }), () => '已退回申請');
   });
-  on('palletBtn', btn => doAction(btn, '儲存中…', () => App.call('a_pallets', { id: o.id, pallets: $('palletInput').value }), () => '棧板數已更新'));
+  on('palletBtn', btn => doAction(btn, '儲存中…', () => App.call('a_pallets', { id: o.id, pallets: $('palletInput').value, returned: $('returnInput').value }), () => '棧板數已更新'));
   on('clearIssueBtn', btn => doAction(btn, '處理中…', () => App.call('a_clearIssue', { id: o.id }), () => '已標記處理'));
   on('shipBtn', btn => {
     const warn = o.confirmedVersion < o.sentVersion ? '廠商還沒確認最新版本。' : '';
@@ -764,6 +765,18 @@ $('syncAllBtn').addEventListener('click', () => App.busy($('syncAllBtn'), '同�
 
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
 
+// 範本只到 H 欄：補上 I「出貨棧板數」、J「收回棧板數」，格式照 H 欄
+function addPalletCols(ws) {
+  [['I', '出貨棧板數'], ['J', '收回棧板數']].forEach(([c, title]) => {
+    for (let r = 7; r <= LAST_ROW; r++) {
+      const src = ws.getCell('H' + r);
+      ws.getCell(c + r).style = JSON.parse(JSON.stringify(src.style || {}));
+    }
+    ws.getCell(c + '7').value = title;
+    ws.getColumn(c).width = 14;
+  });
+}
+
 // ExcelJS 讀入時把資料驗證拆成逐格，寫出前合併回原本的欄範圍，避免重疊的驗證規則
 function normalizeValidations(ws) {
   const model = ws.dataValidations.model;
@@ -797,7 +810,8 @@ $('exBtn').addEventListener('click', () => App.busy($('exBtn'), '產生中…', 
     ws.getCell('B3').value = d.supplierName;
     ws.getCell('E3').value = d.product.name;
     ws.getCell('H3').value = d.product.unit;
-    for (let r = FIRST_ROW; r <= LAST_ROW; r++) ['B', 'C', 'D', 'E', 'F', 'G', 'H'].forEach(c => { ws.getCell(c + r).value = null; });
+    addPalletCols(ws);
+    for (let r = FIRST_ROW; r <= LAST_ROW; r++) ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'].forEach(c => { ws.getCell(c + r).value = null; });
     d.rows.forEach((x, i) => {
       const r = FIRST_ROW + i;
       ws.getCell('B' + r).value = toDate(x.orderDate);
@@ -807,6 +821,8 @@ $('exBtn').addEventListener('click', () => App.busy($('exBtn'), '產生中…', 
       ws.getCell('F' + r).value = `${x.poNo}（第${x.version}版）收貨：${x.customerName}，${x.address}` + (x.note ? `；${x.note}` : '') + (UNITS.includes(x.unit) ? '' : `；單位：${x.unit}`);
       ws.getCell('G' + r).value = x.confirm;
       ws.getCell('H' + r).value = x.shippedQty === '' ? null : x.shippedQty;
+      ws.getCell('I' + r).value = x.pallets === '' || x.pallets === undefined ? null : x.pallets;
+      ws.getCell('J' + r).value = x.returned === '' || x.returned === undefined ? null : x.returned;
     });
     normalizeValidations(ws);
 
@@ -841,7 +857,10 @@ $('imReadBtn').addEventListener('click', () => App.busy($('imReadBtn'), '讀取�
       const raw = ws.getCell('H' + r).value;
       const val = raw && typeof raw === 'object' && 'result' in raw ? raw.result : raw;
       if (val === null || val === undefined || String(val).trim() === '') { blank++; continue; }
-      items.push({ row: r, poNo: m[1], version: m[2] ? Number(m[2]) : 0, sku: prod ? prod.sku : '', productName, qty: String(val).trim(), mark: ws.getCell('G' + r).text.trim() });
+      const num = c => { const v = ws.getCell(c + r).value; const x = v && typeof v === 'object' && 'result' in v ? v.result : v; return x === null || x === undefined ? '' : String(x).trim(); };
+      const hasPalCols = /棧板數/.test(ws.getCell('I7').text);
+      items.push({ row: r, poNo: m[1], version: m[2] ? Number(m[2]) : 0, sku: prod ? prod.sku : '', productName, qty: String(val).trim(), mark: ws.getCell('G' + r).text.trim(),
+        pallets: hasPalCols ? num('I') : '', returned: /收回棧板數/.test(ws.getCell('J7').text) ? num('J') : '' });
     }
     if (!items.length) throw new Error(blank ? '表上的列都還沒填實際出貨數量' : '表上找不到帶有採購單號的列（備註欄要保留 PO 開頭的單號）');
     const d = await App.call('a_importShip', { dryRun: true, shipDate: $('imDate').value, items });
