@@ -41,8 +41,9 @@ const App = {
   async call(action, payload) {
     try { return await App.api(action, payload); } catch (e) {
       if (e.auth) {
-        if (e.auth === 'login') App.clearSession();
-        location.href = 'index.html' + (e.auth === 'password' ? '#password' : '');
+        // 權限不符（role）也要清掉登入狀態，否則登入頁和後台會一直互相跳轉
+        if (e.auth === 'login' || e.auth === 'role') App.clearSession();
+        location.href = 'index.html' + (e.auth === 'password' ? '#password' : e.auth === 'role' ? '#role' : '');
         return new Promise(() => {});
       }
       throw e;
