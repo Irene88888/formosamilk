@@ -127,12 +127,13 @@
 <script>
 const $ = id => document.getElementById(id);
 const ACTIVE = ['待確認', '已叫貨', '廠商已確認'];
-const INTERNAL = ['系統管理員', 'Boss', '員工'];
-const FIXED_PW = ['Boss', '員工']; // 密碼由系統管理員直接指定
+const INTERNAL = ['系統管理員', 'Boss', '業務', '財務'];
+const FIXED_PW = ['Boss', '業務', '財務']; // 密碼由系統管理員直接指定
 const ROLE_NOTE = {
   '系統管理員': '可以使用全部功能：訂單、廠商訂貨表、棧板、帳號管理。',
-  'Boss': '只能看訂單和棧板。',
-  '員工': '只能看訂單和棧板。',
+  'Boss': '只能看訂單和棧板，可以修改訂單。',
+  '業務': '只能看訂單和棧板，可以代客戶新增訂單、修改訂單。',
+  '財務': '只能看訂單和棧板，不能新增或修改訂單內容。',
 };
 const TABS = ['進行中', '待確認', '已叫貨', '廠商已確認', '已出貨', '已取消', '全部'];
 const CHIP = { '待確認': 'pending', '已叫貨': 'sent', '廠商已確認': 'ok', '已出貨': 'done', '已取消': 'stop' };
@@ -149,8 +150,8 @@ async function init() {
     App.setWho(S.me.name);
     $('modeTabs').hidden = false;
     $('accTab').hidden = !S.me.isAdmin;
-    $('newOrderBtn').hidden = !S.me.canSheet; // 只有系統管理員可以代客新增訂單
-    $('sheetTab').hidden = !S.me.canSheet; // 只有系統管理員看得到廠商訂貨表；Boss、員工只看訂單和棧板
+    $('newOrderBtn').hidden = !S.me.canCreate; // 系統管理員、業務可以代客新增訂單
+    $('sheetTab').hidden = !S.me.canSheet; // 只有系統管理員看得到廠商訂貨表；Boss、業務、財務只看訂單和棧板
     if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin)) S.mode = 'orders';
     $('testBanner').hidden = !S.testMode;
     if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
@@ -308,14 +309,14 @@ function renderDetail() {
       ${fact('建立時間', o.createdAt)}
     </dl>
     ${notice}
-    ${editable ? editForm(o) : readonly(o)}
+    ${editable && S.me.canEdit ? editForm(o) : readonly(o)}
     ${shipBlock(o.ship, o)}
     <div class="actions">${actionButtons(o)}</div>
     ${msgBlock(o)}
     <h3>處理紀錄</h3>
     <ul class="log" id="log"><li class="muted">載入中…</li></ul>`;
 
-  if (editable) bindEditForm(o);
+  if (editable && S.me.canEdit) bindEditForm(o);
   bindActions(o);
   loadLog(o.id);
 }
@@ -484,7 +485,7 @@ function bindActions(o) {
   });
 }
 
-/* ───── 訂單：系統管理員代客新增 ───── */
+/* ───── 訂單：系統管理員、業務代客新增 ───── */
 $('newOrderBtn').addEventListener('click', () => {
   if (S.dirty && !confirm('有未儲存的修改，確定要離開？')) return;
   S.creating = true;
@@ -604,7 +605,7 @@ async function loadAccounts() {
 
 function renderAccounts() {
   const A = S.acc;
-  const order = { '系統管理員': 0, 'Boss': 1, '員工': 2, '客戶': 3, '廠商': 4 };
+  const order = { '系統管理員': 0, 'Boss': 1, '業務': 2, '財務': 3, '客戶': 4, '廠商': 5 };
   const list = A.accounts.slice().sort((a, b) => (order[a.role] - order[b.role]) || a.username.localeCompare(b.username));
   $('accList').innerHTML = list.map(a => `
     <li>

@@ -13,7 +13,7 @@ const App = {
   clearSession() {
     try { localStorage.removeItem(this.SESSION_KEY); localStorage.removeItem(this.USER_KEY); } catch (e) { /* 忽略 */ }
   },
-  homeFor(role) { return { '系統管理員': 'staff.html', 'Boss': 'staff.html', '員工': 'staff.html', '客戶': 'customer.html', '廠商': 'supplier.html' }[role] || 'index.html'; },
+  homeFor(role) { return { '系統管理員': 'staff.html', 'Boss': 'staff.html', '業務': 'staff.html', '財務': 'staff.html', '員工': 'staff.html', '客戶': 'customer.html', '廠商': 'supplier.html' }[role] || 'index.html'; },
 
   /** 呼叫後端；失敗時丟出錯誤（err.auth 表示登入問題） */
   async api(action, payload = {}) {
@@ -68,7 +68,7 @@ const App = {
     if (!el) return;
     if (!App.session) { location.href = 'index.html'; return; }
     el.innerHTML = `<span id="whoName">${App.esc(u ? (u.refName || u.name) : '')}</span>
-      ${u && ['Boss', '員工'].includes(u.role) ? '' : '<a href="index.html#password">修改密碼</a>'}
+      ${u && ['Boss', '業務', '財務', '員工'].includes(u.role) ? '' : '<a href="index.html#password">修改密碼</a>'}
       <button class="btn btn-ghost btn-sm" id="logoutBtn">登出</button>`;
     document.getElementById('logoutBtn').addEventListener('click', App.logout);
   },
