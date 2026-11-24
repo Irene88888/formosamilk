@@ -190,6 +190,9 @@ async function init() {
     $('accTab').hidden = !S.me.isAdmin;
     $('dashTab').hidden = !S.me.canDashboard;
     $('prodTab').hidden = !S.me.isAdmin;
+    // Boss、業務、財務登入後先看儀表板（之後重新整理不會跳走）
+    if (!S.booted && ['Boss', '業務', '財務'].includes(S.me.role)) S.mode = 'dash';
+    S.booted = true;
     $('newOrderBtn').hidden = !S.me.canCreate; // 系統管理員、業務可以代客新增訂單
     $('sheetTab').hidden = !S.me.canSheet; // 只有系統管理員看得到廠商訂貨表；Boss、業務、財務只看訂單和棧板
     if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin) || (S.mode === 'dash' && !S.me.canDashboard) || (S.mode === 'products' && !S.me.isAdmin)) S.mode = 'orders';
