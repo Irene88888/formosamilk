@@ -18,6 +18,7 @@
         <button class="btn btn-sm tab" data-mode="sheet" aria-selected="false" id="sheetTab" hidden>廠商訂貨表</button>
         <button class="btn btn-sm tab" data-mode="pallet" aria-selected="false">棧板／籃</button>
         <button class="btn btn-sm tab" data-mode="dash" aria-selected="false" id="dashTab" hidden>儀表板</button>
+        <button class="btn btn-sm tab" data-mode="products" aria-selected="false" id="prodTab" hidden>品項</button>
         <button class="btn btn-sm tab" data-mode="accounts" aria-selected="false" id="accTab" hidden>帳號管理</button>
       </nav>
     </div>
@@ -122,6 +123,21 @@
   </div>
 
   <!-- 帳號管理 -->
+  <!-- 品項維護（只限系統管理員） -->
+  <div id="productsView" hidden>
+    <div class="split">
+      <section class="panel list" style="padding:12px">
+        <div class="section-head" style="margin:0 0 8px">
+          <h2>品項</h2>
+          <button id="prodNew" class="btn btn-primary btn-sm">新增品項</button>
+        </div>
+        <p class="muted" style="margin-top:0">售價只存在系統內部，不會出現在共享給廠商的試算表。</p>
+        <div id="prodList"><p class="muted">載入中…</p></div>
+      </section>
+      <section class="panel" id="prodDetail"><div class="empty">從左側選一個品項</div></section>
+    </div>
+  </div>
+
   <div id="accountsView" hidden>
     <div class="split" style="grid-template-columns:none">
       <section class="panel">
@@ -173,9 +189,10 @@ async function init() {
     $('modeTabs').hidden = false;
     $('accTab').hidden = !S.me.isAdmin;
     $('dashTab').hidden = !S.me.canDashboard;
+    $('prodTab').hidden = !S.me.isAdmin;
     $('newOrderBtn').hidden = !S.me.canCreate; // 系統管理員、業務可以代客新增訂單
     $('sheetTab').hidden = !S.me.canSheet; // 只有系統管理員看得到廠商訂貨表；Boss、業務、財務只看訂單和棧板
-    if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin) || (S.mode === 'dash' && !S.me.canDashboard)) S.mode = 'orders';
+    if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin) || (S.mode === 'dash' && !S.me.canDashboard) || (S.mode === 'products' && !S.me.isAdmin)) S.mode = 'orders';
     $('testBanner').hidden = !S.testMode;
     if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
     setMode(S.mode, true);
@@ -197,10 +214,12 @@ function setMode(mode, force) {
   $('sheetView').hidden = mode !== 'sheet';
   $('palletView').hidden = mode !== 'pallet';
   $('dashView').hidden = mode !== 'dash';
+  $('productsView').hidden = mode !== 'products';
   if (mode === 'orders') renderAll();
   else if (mode === 'sheet') renderSheetForm();
   else if (mode === 'pallet') loadPallets();
   else if (mode === 'dash') loadDash();
+  else if (mode === 'products') loadProducts();
   else loadAccounts();
 }
 $('modeTabs').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
@@ -1151,10 +1170,10 @@ function renderDash(d) {
   const maxSales = Math.max(1, ...d.months.map(m => m.sales));
   const row = (cells, head) => `<tr>${cells.map((x, i) => head ? `<th${i ? ' class="r"' : ''}>${x}</th>` : `<td${i ? ' class="r num"' : ''}>${x}</td>`).join('')}</tr>`;
   const warn = [];
-  if (d.missingSale.length) warn.push(`「${d.missingSale.map(App.esc).join('、')}」在「售價」工作表沒有售價，銷售額以 0 計算。`);
+  if (d.missingSale.length) warn.push(`「${d.missingSale.map(App.esc).join('、')}」還沒設定售價，銷售額以 0 計算${S.me.isAdmin ? '，請到「品項」頁設定' : '，請系統管理員到「品項」頁設定'}。`);
   if (d.missingCostOrders) warn.push(`${d.missingCostOrders} 張已出貨訂單的品項沒有採購單價，成本以 0 計算。`);
   $('dashBody').innerHTML = `
-    ${warn.length ? `<div class="banner banner-warn">${warn.join('<br>')}請到系統試算表補上後按「查詢」。</div>` : ''}
+    ${warn.length ? `<div class="banner banner-warn">${warn.join('<br>')}</div>` : ''}
     <h3>A. 銷售額／進貨成本／毛利 <span class="muted">（已出貨 ${d.total.shippedOrders} 張，依實際出貨數量）</span></h3>
     <div class="kpis">
       ${kpi('累積銷售額', money(sh.sales))}
@@ -1189,8 +1208,91 @@ function renderDash(d) {
       ${row(['品項', '訂貨量', '已出貨', '銷售額', '進貨成本', '毛利'], true)}
       ${d.products.map(r => row([App.esc(r.name), qtyFmt(r.orderedQty) + ' ' + App.esc(r.unit), qtyFmt(r.shippedQty) + ' ' + App.esc(r.unit), money(r.sales), money(r.cost), money(r.margin)])).join('') || row(['沒有資料', '', '', '', '', ''])}
     </table></div>
-    <p class="muted">售價來自系統試算表的「售價」工作表（第一次打開儀表板時自動建立，每個品項一列，填「售價」即可；調價時新增一列並填生效日期）。進貨成本用訂單上的採購單價。</p>`;
+    <p class="muted">售價由系統管理員在「品項」頁設定（不放在試算表）。進貨成本用訂單上的採購單價。</p>`;
 }
+
+/* ───── 品項維護（系統管理員） ───── */
+const PROD = { data: null, sel: null };
+const priceTxt = v => v === null || v === undefined || v === '' ? '未設定' : 'NT$ ' + Number(v).toLocaleString('zh-TW', { maximumFractionDigits: 4 });
+
+async function loadProducts() {
+  try { PROD.data = await App.call('a_products'); renderProducts(); }
+  catch (e) { $('prodList').innerHTML = `<p class="muted">${App.esc(e.message)}</p>`; }
+}
+
+function renderProducts() {
+  const ps = PROD.data.products;
+  $('prodList').innerHTML = ps.length ? ps.map(p => `
+    <button class="list-item" data-sku="${App.esc(p.sku)}" aria-current="${PROD.sel === p.sku}">
+      <span class="row"><strong>${App.esc(p.name)}</strong><span class="num">${priceTxt(p.salePrice)}</span></span>
+      <span class="muted">${App.esc(p.sku)}　${App.esc(p.unit)}　${App.esc(p.supplierName || '未指定廠商')}　採購價 ${p.price === '' ? '未設定' : App.esc(p.price)}</span>
+    </button>`).join('') : '<div class="empty">還沒有品項</div>';
+  renderProductDetail();
+}
+
+function renderProductDetail() {
+  if (!PROD.sel) { $('prodDetail').innerHTML = '<div class="empty">從左側選一個品項</div>'; return; }
+  const isNew = PROD.sel === '__new';
+  const p = isNew ? { sku: '', name: '', unit: '瓶', supplierCode: '', price: '', sheetUrl: '', salePrices: [] } : PROD.data.products.find(x => x.sku === PROD.sel);
+  if (!p) { PROD.sel = null; return renderProductDetail(); }
+  const custName = c => (PROD.data.customers.find(x => x.code === c) || {}).name || c;
+  const opt = (v, t, cur) => `<option value="${App.esc(v)}" ${v === cur ? 'selected' : ''}>${App.esc(t)}</option>`;
+  $('prodDetail').innerHTML = `
+    <div class="ticket-head"><span class="ticket-no">${isNew ? '新增品項' : App.esc(p.name)}</span>${isNew ? '' : `<span class="num" style="font-size:20px;font-weight:700">${priceTxt(p.salePrice)}</span>`}</div>
+    ${isNew ? '' : '<p class="muted" style="margin:2px 0 0">目前售價（所有客戶通用、今天生效的價格）</p>'}
+    <h3>品項資料</h3>
+    <div class="grid2">
+      ${isNew ? `<div class="field"><label for="pSku">料號（空白自動編號）</label><input id="pSku" placeholder="例如 F002" spellcheck="false"></div>` : `<div class="field"><label>料號</label><input value="${App.esc(p.sku)}" disabled></div>`}
+      <div class="field"><label for="pName">品名</label><input id="pName" value="${App.esc(p.name)}"></div>
+      <div class="field"><label for="pUnit">單位</label><input id="pUnit" value="${App.esc(p.unit)}" list="pUnits"><datalist id="pUnits">${UNITS.map(u => `<option value="${u}">`).join('')}</datalist></div>
+      <div class="field"><label for="pSup">預設廠商</label><select id="pSup">${opt('', '（不指定）', p.supplierCode)}${PROD.data.suppliers.map(x => opt(x.code, x.name, p.supplierCode)).join('')}</select></div>
+      <div class="field"><label for="pPrice">預設採購價（每${App.esc(p.unit || '單位')}）</label><input id="pPrice" type="number" min="0" step="any" inputmode="decimal" value="${App.esc(p.price)}"></div>
+      <div class="field"><label for="pUrl">廠商訂貨表網址（選填）</label><input id="pUrl" value="${App.esc(p.sheetUrl || '')}" spellcheck="false"></div>
+    </div>
+    <p class="muted">預設採購價會出現在共享的試算表上（新訂單的採購單價也會寫在「明細」表）。</p>
+    <div class="actions"><button id="pSave" class="btn btn-primary">${isNew ? '新增品項' : '儲存品項資料'}</button></div>
+    ${isNew ? '' : `
+    <h3>售價</h3>
+    <div class="grid2">
+      <div class="field"><label for="spPrice">售價（每${App.esc(p.unit)}）</label><input id="spPrice" type="number" min="0" step="any" inputmode="decimal"></div>
+      <div class="field"><label for="spFrom">生效日期（空白＝一直有效）</label><input id="spFrom" type="date"></div>
+      <div class="field"><label for="spCust">適用客戶</label><select id="spCust">${opt('', '所有客戶', '')}${PROD.data.customers.map(c => opt(c.code, c.name, '')).join('')}</select></div>
+      <div class="field"><label for="spNote">備註（選填）</label><input id="spNote"></div>
+    </div>
+    <div class="actions"><button id="spAdd" class="btn">設定售價</button></div>
+    <p class="muted">調價時填新售價和生效日期，舊訂單仍照舊價計算。同一客戶、同一生效日期再設定一次會直接改掉原本的價格。</p>
+    <ul class="log">${p.salePrices.length ? p.salePrices.map(x => `
+      <li><strong class="num">${priceTxt(x.price)}</strong>　${x.from ? `<span class="num">${App.esc(x.from)}</span> 起` : '一直有效'}　${x.customerCode ? App.esc(custName(x.customerCode)) + ' 專屬' : '所有客戶'}
+        <button class="btn btn-ghost btn-sm" data-spdel="${App.esc(x.id)}" style="float:right">刪除</button>
+        <pre>${App.esc([x.note, `${x.by} ${x.at}`].filter(Boolean).join('；'))}</pre></li>`).join('') : '<li class="muted">還沒有設定售價</li>'}</ul>`}`;
+
+  const done = (d, msg) => { PROD.data = d; PROD.sel = d.sku || PROD.sel; renderProducts(); App.toast(msg); };
+  $('pSave').addEventListener('click', () => App.busy($('pSave'), '儲存中…', async () => {
+    try {
+      done(await App.call('a_productSave', { isNew, sku: p.sku, newSku: isNew ? $('pSku').value : '', name: $('pName').value, unit: $('pUnit').value,
+        supplierCode: $('pSup').value, price: $('pPrice').value, sheetUrl: $('pUrl').value }), isNew ? '已新增品項' : '已儲存');
+    } catch (e) { App.toast(e.message, true); }
+  }));
+  if (isNew) return;
+  $('spAdd').addEventListener('click', () => App.busy($('spAdd'), '儲存中…', async () => {
+    try {
+      done(await App.call('a_salePriceAdd', { sku: p.sku, price: $('spPrice').value, from: $('spFrom').value, customerCode: $('spCust').value, note: $('spNote').value }), '已設定售價');
+    } catch (e) { App.toast(e.message, true); }
+  }));
+  $('prodDetail').querySelectorAll('[data-spdel]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('刪除這筆售價？')) return;
+    try { done(await App.busy(btn, '…', () => App.call('a_salePriceDelete', { id: btn.dataset.spdel })), '已刪除'); }
+    catch (e) { App.toast(e.message, true); }
+  }));
+}
+
+$('prodList').addEventListener('click', e => {
+  const b = e.target.closest('[data-sku]');
+  if (!b) return;
+  PROD.sel = b.dataset.sku; renderProducts();
+  if (window.innerWidth < 900) $('prodDetail').scrollIntoView({ behavior: 'smooth' });
+});
+$('prodNew').addEventListener('click', () => { PROD.sel = '__new'; renderProducts(); });
 
 window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
 init();
