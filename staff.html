@@ -1171,7 +1171,7 @@ function renderDash(d) {
   const row = (cells, head) => `<tr>${cells.map((x, i) => head ? `<th${i ? ' class="r"' : ''}>${x}</th>` : `<td${i ? ' class="r num"' : ''}>${x}</td>`).join('')}</tr>`;
   const warn = [];
   if (d.missingSale.length) warn.push(`「${d.missingSale.map(App.esc).join('、')}」還沒設定售價，銷售額以 0 計算${S.me.isAdmin ? '，請到「品項」頁設定' : '，請系統管理員到「品項」頁設定'}。`);
-  if (d.missingCostOrders) warn.push(`${d.missingCostOrders} 張已出貨訂單的品項沒有採購單價，成本以 0 計算。`);
+  if ((d.missingCost || []).length) warn.push(`「${d.missingCost.map(App.esc).join('、')}」沒有採購價，成本以 0 計算${S.me.isAdmin ? '，請到「品項」頁填預設採購價' : '，請系統管理員到「品項」頁填預設採購價'}。`);
   $('dashBody').innerHTML = `
     ${warn.length ? `<div class="banner banner-warn">${warn.join('<br>')}</div>` : ''}
     <h3>A. 銷售額／進貨成本／毛利 <span class="muted">（已出貨 ${d.total.shippedOrders} 張，依實際出貨數量）</span></h3>
