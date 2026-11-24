@@ -131,7 +131,7 @@
           <h2>品項</h2>
           <button id="prodNew" class="btn btn-primary btn-sm">新增品項</button>
         </div>
-        <p class="muted" style="margin-top:0">售價只存在系統內部，不會出現在共享給廠商的試算表。</p>
+        <p class="muted" style="margin-top:0">售價、採購價都存在系統內部，不會出現在共享給廠商的試算表。</p>
         <div id="prodList"><p class="muted">載入中…</p></div>
       </section>
       <section class="panel" id="prodDetail"><div class="empty">從左側選一個品項</div></section>
@@ -1249,7 +1249,7 @@ function renderProductDetail() {
       <div class="field"><label for="pPrice">預設採購價（每${App.esc(p.unit || '單位')}）</label><input id="pPrice" type="number" min="0" step="any" inputmode="decimal" value="${App.esc(p.price)}"></div>
       <div class="field"><label for="pUrl">廠商訂貨表網址（選填）</label><input id="pUrl" value="${App.esc(p.sheetUrl || '')}" spellcheck="false"></div>
     </div>
-    <p class="muted">預設採購價會出現在共享的試算表上（新訂單的採購單價也會寫在「明細」表）。</p>
+    <p class="muted">採購價存在另一份只有你看得到的「內部價格」試算表，不會出現在共享給廠商的系統試算表。</p>
     <div class="actions"><button id="pSave" class="btn btn-primary">${isNew ? '新增品項' : '儲存品項資料'}</button></div>
     ${isNew ? '' : `
     <h3>售價</h3>
