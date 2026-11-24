@@ -16,7 +16,8 @@
       <nav class="mode-tabs" id="modeTabs" style="margin:0" hidden>
         <button class="btn btn-sm tab" data-mode="orders" aria-selected="true">訂單</button>
         <button class="btn btn-sm tab" data-mode="sheet" aria-selected="false" id="sheetTab" hidden>廠商訂貨表</button>
-        <button class="btn btn-sm tab" data-mode="pallet" aria-selected="false">棧板</button>
+        <button class="btn btn-sm tab" data-mode="pallet" aria-selected="false">棧板／籃</button>
+        <button class="btn btn-sm tab" data-mode="dash" aria-selected="false" id="dashTab" hidden>儀表板</button>
         <button class="btn btn-sm tab" data-mode="accounts" aria-selected="false" id="accTab" hidden>帳號管理</button>
       </nav>
     </div>
@@ -46,15 +47,36 @@
     </div>
   </div>
 
+  <!-- 儀表板 -->
+  <div id="dashView" hidden>
+    <section class="panel">
+      <div class="section-head" style="flex-wrap:wrap;gap:8px">
+        <h2>儀表板</h2>
+        <div class="dash-filter">
+          <nav class="tabs" id="dashQuick" style="margin:0">
+            <button class="btn btn-sm tab" data-range="month">本月</button>
+            <button class="btn btn-sm tab" data-range="last">上月</button>
+            <button class="btn btn-sm tab" data-range="year">今年</button>
+            <button class="btn btn-sm tab" data-range="all">全部</button>
+          </nav>
+          <label class="muted">交期 <input type="date" id="dashFrom" aria-label="開始日期"></label>
+          <label class="muted">到 <input type="date" id="dashTo" aria-label="結束日期"></label>
+          <button id="dashGo" class="btn btn-sm">查詢</button>
+        </div>
+      </div>
+      <div id="dashBody"><p class="muted">載入中…</p></div>
+    </section>
+  </div>
+
   <!-- 棧板 -->
   <div id="palletView" hidden>
     <div class="split">
       <section class="panel list" style="padding:12px">
         <div class="section-head" style="margin:0 0 8px">
-          <h2>棧板餘額</h2>
+          <h2>棧板／籃餘額</h2>
           <button id="palRefresh" class="btn btn-ghost btn-sm">重新整理</button>
         </div>
-        <p class="muted" style="margin-top:0">送出＝已出貨訂單的出貨棧板數；收回＝訂單上的收回棧板數＋右側另外登記的收回；餘額＝還在客戶那裡的板數。</p>
+        <p class="muted" style="margin-top:0">送出＝已出貨訂單的出貨棧板數、出貨籃數；收回＝訂單上的收回數量＋右側另外登記的收回；餘額＝還在客戶那裡的數量。</p>
         <div id="palList"><p class="muted">載入中…</p></div>
       </section>
       <section class="panel" id="palDetail"><div class="empty">從左側選一位客戶</div></section>
@@ -150,9 +172,10 @@ async function init() {
     App.setWho(S.me.name);
     $('modeTabs').hidden = false;
     $('accTab').hidden = !S.me.isAdmin;
+    $('dashTab').hidden = !S.me.canDashboard;
     $('newOrderBtn').hidden = !S.me.canCreate; // 系統管理員、業務可以代客新增訂單
     $('sheetTab').hidden = !S.me.canSheet; // 只有系統管理員看得到廠商訂貨表；Boss、業務、財務只看訂單和棧板
-    if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin)) S.mode = 'orders';
+    if ((S.mode === 'sheet' && !S.me.canSheet) || (S.mode === 'accounts' && !S.me.isAdmin) || (S.mode === 'dash' && !S.me.canDashboard)) S.mode = 'orders';
     $('testBanner').hidden = !S.testMode;
     if (S.selected && !S.orders.some(o => o.id === S.selected)) S.selected = null;
     setMode(S.mode, true);
@@ -173,9 +196,11 @@ function setMode(mode, force) {
   $('accountsView').hidden = mode !== 'accounts';
   $('sheetView').hidden = mode !== 'sheet';
   $('palletView').hidden = mode !== 'pallet';
+  $('dashView').hidden = mode !== 'dash';
   if (mode === 'orders') renderAll();
   else if (mode === 'sheet') renderSheetForm();
   else if (mode === 'pallet') loadPallets();
+  else if (mode === 'dash') loadDash();
   else loadAccounts();
 }
 $('modeTabs').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
@@ -331,15 +356,19 @@ function msgBlock(o) {
     <div class="actions"><button id="copyMsgBtn" class="btn btn-sm">複製訊息</button></div>`;
 }
 
+const blank = v => v === '' || v === undefined || v === null;
+const cnt = (v, u) => blank(v) ? '未填' : `${v} ${u}`;
+const cntInput = (id, label, v) => `<label class="muted" style="display:grid;gap:2px;font-size:13px">${label}<input id="${id}" type="number" min="0" step="1" inputmode="numeric" class="erp-input" value="${blank(v) ? '' : v}"></label>`;
+
 function shipBlock(ship, o) {
   if (!ship) return '';
   return `
     <h3>廠商出貨回報</h3>
-    <dl class="meta">${fact('出貨日', ship.date)}${fact('出貨棧板數', o.pallets === '' ? '未填' : o.pallets + ' 板')}${fact('收回棧板數', o.returned === '' || o.returned === undefined ? '未填' : o.returned + ' 板')}${fact('回報人', ship.by)}${fact('回報時間', ship.at)}</dl>
-    <div class="actions" style="margin-bottom:8px">
-      <input id="palletInput" type="number" min="0" step="1" inputmode="numeric" class="erp-input" placeholder="出貨棧板數" aria-label="出貨棧板數" value="${o.pallets === '' ? '' : o.pallets}">
-      <input id="returnInput" type="number" min="0" step="1" inputmode="numeric" class="erp-input" placeholder="收回棧板數" aria-label="收回棧板數" value="${o.returned === '' || o.returned === undefined ? '' : o.returned}">
-      <button id="palletBtn" class="btn btn-sm">儲存棧板數</button>
+    <dl class="meta">${fact('出貨日', ship.date)}${fact('出貨棧板數', cnt(o.pallets, '板'))}${fact('收回棧板數', cnt(o.returned, '板'))}${fact('出貨籃數', cnt(o.baskets, '籃'))}${fact('收回籃數', cnt(o.basketsBack, '籃'))}${fact('回報人', ship.by)}${fact('回報時間', ship.at)}</dl>
+    <div class="actions" style="margin-bottom:8px;align-items:end">
+      ${cntInput('palletInput', '出貨棧板數', o.pallets)}${cntInput('returnInput', '收回棧板數', o.returned)}
+      ${cntInput('basketInput', '出貨籃數', o.baskets)}${cntInput('basketBackInput', '收回籃數', o.basketsBack)}
+      <button id="palletBtn" class="btn btn-sm">儲存棧板／籃數</button>
     </div>
     ${ship.partial ? '<p class="note">部分品項尚未回報出貨。</p>' : ''}
     <ul class="items">${ship.lines.map(l => `<li><span>${App.esc(l.name)}</span><span class="num">${l.qty === null || l.qty === undefined
@@ -471,7 +500,8 @@ function bindActions(o) {
     if (reason === null) return;
     doAction(btn, '處理中…', () => App.call('a_reject', { id: o.id, reason }), () => '已退回申請');
   });
-  on('palletBtn', btn => doAction(btn, '儲存中…', () => App.call('a_pallets', { id: o.id, pallets: $('palletInput').value, returned: $('returnInput').value }), () => '棧板數已更新'));
+  on('palletBtn', btn => doAction(btn, '儲存中…', () => App.call('a_pallets', { id: o.id, pallets: $('palletInput').value, returned: $('returnInput').value,
+    baskets: $('basketInput').value, basketsBack: $('basketBackInput').value }), () => '棧板／籃數已更新'));
   on('clearIssueBtn', btn => doAction(btn, '處理中…', () => App.call('a_clearIssue', { id: o.id }), () => '已標記處理'));
   on('shipBtn', btn => {
     const warn = o.confirmedVersion < o.sentVersion ? '廠商還沒確認最新版本。' : '';
@@ -859,14 +889,17 @@ $('syncAllBtn').addEventListener('click', () => App.busy($('syncAllBtn'), '同�
 
 const toDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
 
-// 範本只到 H 欄：補上 I「出貨棧板數」、J「收回棧板數」，格式照 H 欄
+// 範本只到 H 欄：補上 I「出貨棧板數」、J「收回棧板數」、K「出貨籃數」、L「收回籃數」，格式照 H 欄
+// （K、L 欄範本上已經有標題時保留原本的字）
 function addPalletCols(ws) {
-  [['I', '出貨棧板數'], ['J', '收回棧板數']].forEach(([c, title]) => {
+  [['I', '出貨棧板數'], ['J', '收回棧板數'], ['K', '出貨籃數'], ['L', '收回籃數']].forEach(([c, title]) => {
+    const keep = (c === 'K' || c === 'L') && ws.getCell(c + '7').text.trim() !== '';
     for (let r = 7; r <= LAST_ROW; r++) {
+      if (keep && r === 7) continue;
       const src = ws.getCell('H' + r);
       ws.getCell(c + r).style = JSON.parse(JSON.stringify(src.style || {}));
     }
-    ws.getCell(c + '7').value = title;
+    if (!keep) ws.getCell(c + '7').value = title;
     ws.getColumn(c).width = 14;
   });
 }
@@ -905,7 +938,7 @@ $('exBtn').addEventListener('click', () => App.busy($('exBtn'), '產生中…', 
     ws.getCell('E3').value = d.product.name;
     ws.getCell('H3').value = d.product.unit;
     addPalletCols(ws);
-    for (let r = FIRST_ROW; r <= LAST_ROW; r++) ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'].forEach(c => { ws.getCell(c + r).value = null; });
+    for (let r = FIRST_ROW; r <= LAST_ROW; r++) ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'].forEach(c => { ws.getCell(c + r).value = null; });
     d.rows.forEach((x, i) => {
       const r = FIRST_ROW + i;
       ws.getCell('B' + r).value = toDate(x.orderDate);
@@ -917,6 +950,8 @@ $('exBtn').addEventListener('click', () => App.busy($('exBtn'), '產生中…', 
       ws.getCell('H' + r).value = x.shippedQty === '' ? null : x.shippedQty;
       ws.getCell('I' + r).value = x.pallets === '' || x.pallets === undefined ? null : x.pallets;
       ws.getCell('J' + r).value = x.returned === '' || x.returned === undefined ? null : x.returned;
+      ws.getCell('K' + r).value = blank(x.baskets) ? null : x.baskets;
+      ws.getCell('L' + r).value = blank(x.basketsBack) ? null : x.basketsBack;
     });
     normalizeValidations(ws);
 
@@ -954,7 +989,8 @@ $('imReadBtn').addEventListener('click', () => App.busy($('imReadBtn'), '讀取�
       const num = c => { const v = ws.getCell(c + r).value; const x = v && typeof v === 'object' && 'result' in v ? v.result : v; return x === null || x === undefined ? '' : String(x).trim(); };
       const hasPalCols = /棧板數/.test(ws.getCell('I7').text);
       items.push({ row: r, poNo: m[1], version: m[2] ? Number(m[2]) : 0, sku: prod ? prod.sku : '', productName, qty: String(val).trim(), mark: ws.getCell('G' + r).text.trim(),
-        pallets: hasPalCols ? num('I') : '', returned: /收回棧板數/.test(ws.getCell('J7').text) ? num('J') : '' });
+        pallets: hasPalCols ? num('I') : '', returned: /收回棧板數/.test(ws.getCell('J7').text) ? num('J') : '',
+        baskets: /籃/.test(ws.getCell('K7').text) ? num('K') : '', basketsBack: /籃/.test(ws.getCell('L7').text) ? num('L') : '' });
     }
     if (!items.length) throw new Error(blank ? '表上的列都還沒填實際出貨數量' : '表上找不到帶有採購單號的列（備註欄要保留 PO 開頭的單號）');
     const d = await App.call('a_importShip', { dryRun: true, shipDate: $('imDate').value, items });
@@ -1002,10 +1038,11 @@ function renderPalList() {
   const custs = (S.palCustomers || []);
   $('palList').innerHTML = (PAL.list.length ? PAL.list.map(r => `
     <button class="list-item" data-pal="${App.esc(palKey(r))}" aria-current="${PAL.sel === palKey(r)}">
-      <span class="row"><strong>${App.esc(r.customerName)}</strong><span class="num" style="font-weight:700">${r.balance} 板</span></span>
-      <span class="muted">${App.esc(r.supplierName)}　送出 ${r.sent}／收回 ${r.returned}${r.adjust ? `／調整 ${r.adjust > 0 ? '+' : ''}${r.adjust}` : ''}</span>
+      <span class="row"><strong>${App.esc(r.customerName)}</strong><span class="num" style="font-weight:700">${r.balance} 板　${r.bBalance} 籃</span></span>
+      <span class="muted">${App.esc(r.supplierName)}　棧板 送出 ${r.sent}／收回 ${r.returned}${r.adjust ? `／調整 ${r.adjust > 0 ? '+' : ''}${r.adjust}` : ''}</span>
+      ${r.bSent || r.bReturned || r.bAdjust ? `<span class="muted">籃 送出 ${r.bSent}／收回 ${r.bReturned}${r.bAdjust ? `／調整 ${r.bAdjust > 0 ? '+' : ''}${r.bAdjust}` : ''}</span>` : ''}
       ${r.lastReturn ? `<span class="muted">最後收回 <span class="num">${App.esc(r.lastReturn)}</span></span>` : ''}
-    </button>`).join('') : '<div class="empty">還沒有任何棧板紀錄。廠商回報出貨並填寫棧板數後會出現在這裡。</div>')
+    </button>`).join('') : '<div class="empty">還沒有任何棧板或籃子紀錄。廠商回報出貨並填寫棧板數、籃數後會出現在這裡。</div>')
     + `<details style="margin-top:10px"><summary class="muted">登記其他廠商與客戶</summary>
         <div class="field" style="margin-top:8px"><label for="palSupNew">廠商</label><select id="palSupNew">${S.suppliers.map(x => `<option value="${App.esc(x.code)}">${App.esc(x.name)}</option>`).join('')}</select></div>
         <div class="field"><label for="palCustNew">客戶代號</label><input id="palCustNew" placeholder="例如 C001"></div>
@@ -1037,13 +1074,15 @@ async function loadPalDetail() {
 }
 
 function renderPalDetail(supplierCode, customerCode, history) {
-  const r = PAL.list.find(x => palKey(x) === PAL.sel) || { supplierName: supName(supplierCode), customerName: customerCode, balance: 0, sent: 0, returned: 0, adjust: 0 };
+  const r = PAL.list.find(x => palKey(x) === PAL.sel) || { supplierName: supName(supplierCode), customerName: customerCode, balance: 0, sent: 0, returned: 0, adjust: 0, bBalance: 0 };
   const sign = h => h.type === '收回' ? '−' : h.type === '送出' ? '+' : (h.qty > 0 ? '+' : '−');
+  const unit = h => h.kind === '籃' ? '籃' : '板';
   $('palDetail').innerHTML = `
-    <div class="ticket-head"><span class="ticket-no">${App.esc(r.customerName)}</span><span class="num" style="font-size:20px;font-weight:700">${r.balance} 板</span></div>
-    <p class="muted" style="margin:2px 0 0">${App.esc(r.supplierName)} 的棧板目前在這位客戶那裡的數量</p>
+    <div class="ticket-head"><span class="ticket-no">${App.esc(r.customerName)}</span><span class="num" style="font-size:20px;font-weight:700">${r.balance} 板　${r.bBalance || 0} 籃</span></div>
+    <p class="muted" style="margin:2px 0 0">${App.esc(r.supplierName)} 的棧板、籃子目前在這位客戶那裡的數量</p>
     <h3>登記</h3>
     <div class="grid2">
+      <div class="field"><label for="palKind">種類</label><select id="palKind"><option value="棧板">棧板</option><option value="籃">籃子</option></select></div>
       <div class="field"><label for="palType">類型</label><select id="palType"><option>收回</option><option>調整</option></select></div>
       <div class="field"><label for="palDate">日期</label><input type="date" id="palDate" value="${App.today(0)}"></div>
       <div class="field"><label for="palQty" id="palQtyLabel">收回板數</label><input type="number" id="palQty" step="1" inputmode="numeric"></div>
@@ -1053,17 +1092,19 @@ function renderPalDetail(supplierCode, customerCode, history) {
     <h3>紀錄</h3>
     <ul class="log">${history.length ? history.map(h => `
       <li style="${h.deleted ? 'opacity:.5;text-decoration:line-through' : ''}">
-        <span class="num">${App.esc(h.date)}</span>　<strong>${App.esc(h.type)} ${h.qty === '' ? '?' : sign(h) + Math.abs(h.qty)} 板</strong>　<span class="muted">${App.esc(h.by)}</span>
+        <span class="num">${App.esc(h.date)}</span>　<strong>${h.kind === '籃' ? '籃子' : '棧板'}${App.esc(h.type)} ${h.qty === '' ? '?' : sign(h) + Math.abs(h.qty)} ${unit(h)}</strong>　<span class="muted">${App.esc(h.by)}</span>
         ${h.id && !h.deleted ? `<button class="btn btn-ghost btn-sm" data-paldel="${App.esc(h.id)}" style="float:right">刪除</button>` : ''}
         ${h.note ? `<pre>${App.esc(h.note)}</pre>` : ''}</li>`).join('') : '<li class="muted">沒有紀錄</li>'}</ul>`;
-  $('palType').addEventListener('change', e => {
-    const adj = e.target.value === '調整';
-    $('palQtyLabel').textContent = adj ? '調整板數（多出填正數，少了填負數）' : '收回板數';
+  const relabel = () => {
+    const adj = $('palType').value === '調整', u = $('palKind').value === '籃' ? '籃' : '板';
+    $('palQtyLabel').textContent = adj ? `調整${u}數（多出填正數，少了填負數）` : `收回${u}數`;
     $('palNoteLabel').textContent = adj ? '原因（必填，例如盤點差異、破損報廢）' : '備註（選填）';
-  });
+  };
+  $('palType').addEventListener('change', relabel);
+  $('palKind').addEventListener('change', relabel);
   $('palSave').addEventListener('click', () => App.busy($('palSave'), '登記中…', async () => {
     try {
-      const d = await App.call('a_palletAdd', { supplierCode, customerCode, type: $('palType').value, qty: $('palQty').value, date: $('palDate').value, note: $('palNote').value });
+      const d = await App.call('a_palletAdd', { supplierCode, customerCode, kind: $('palKind').value, type: $('palType').value, qty: $('palQty').value, date: $('palDate').value, note: $('palNote').value });
       PAL.list = d.balances; renderPalList(); renderPalDetail(supplierCode, customerCode, d.history);
       App.toast('已登記');
     } catch (e) { App.toast(e.message, true); }
@@ -1075,6 +1116,80 @@ function renderPalDetail(supplierCode, customerCode, history) {
       PAL.list = d.balances; renderPalList(); renderPalDetail(supplierCode, customerCode, d.history);
     } catch (e) { App.toast(e.message, true); }
   }));
+}
+
+/* ───── 儀表板 ───── */
+const DASH = { range: 'month' };
+const money = n => 'NT$ ' + Math.round(n).toLocaleString('zh-TW');
+const qtyFmt = n => Number(n).toLocaleString('zh-TW');
+const pct = (a, b) => b ? (a / b * 100).toFixed(1) + '%' : '—';
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+function dashRange(k) {
+  const t = new Date(), y = t.getFullYear(), m = t.getMonth();
+  if (k === 'month') return [ymd(new Date(y, m, 1)), ymd(new Date(y, m + 1, 0))];
+  if (k === 'last') return [ymd(new Date(y, m - 1, 1)), ymd(new Date(y, m, 0))];
+  if (k === 'year') return [`${y}-01-01`, `${y}-12-31`];
+  return ['', ''];
+}
+
+function loadDash(k) {
+  if (k) DASH.range = k;
+  if (DASH.range !== 'custom') { const [f, t] = dashRange(DASH.range); $('dashFrom').value = f; $('dashTo').value = t; }
+  document.querySelectorAll('#dashQuick [data-range]').forEach(b => b.setAttribute('aria-selected', b.dataset.range === DASH.range));
+  $('dashBody').innerHTML = '<p class="muted">載入中…</p>';
+  App.call('a_dashboard', { from: $('dashFrom').value, to: $('dashTo').value })
+    .then(renderDash)
+    .catch(e => { $('dashBody').innerHTML = `<p class="muted">${App.esc(e.message)}</p>`; });
+}
+$('dashQuick').addEventListener('click', e => { const b = e.target.closest('[data-range]'); if (b) loadDash(b.dataset.range); });
+$('dashGo').addEventListener('click', () => { DASH.range = 'custom'; loadDash(); });
+
+function renderDash(d) {
+  const sh = d.total.shipped, op = d.total.open, c = d.containers;
+  const kpi = (label, value, sub) => `<div class="kpi"><div class="kpi-label">${label}</div><div class="kpi-value num">${value}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ''}</div>`;
+  const maxSales = Math.max(1, ...d.months.map(m => m.sales));
+  const row = (cells, head) => `<tr>${cells.map((x, i) => head ? `<th${i ? ' class="r"' : ''}>${x}</th>` : `<td${i ? ' class="r num"' : ''}>${x}</td>`).join('')}</tr>`;
+  const warn = [];
+  if (d.missingSale.length) warn.push(`「${d.missingSale.map(App.esc).join('、')}」在「售價」工作表沒有售價，銷售額以 0 計算。`);
+  if (d.missingCostOrders) warn.push(`${d.missingCostOrders} 張已出貨訂單的品項沒有採購單價，成本以 0 計算。`);
+  $('dashBody').innerHTML = `
+    ${warn.length ? `<div class="banner banner-warn">${warn.join('<br>')}請到系統試算表補上後按「查詢」。</div>` : ''}
+    <h3>A. 銷售額／進貨成本／毛利 <span class="muted">（已出貨 ${d.total.shippedOrders} 張，依實際出貨數量）</span></h3>
+    <div class="kpis">
+      ${kpi('累積銷售額', money(sh.sales))}
+      ${kpi('進貨成本', money(sh.cost))}
+      ${kpi('毛利金額', money(sh.margin), '毛利率 ' + pct(sh.margin, sh.sales))}
+    </div>
+    ${op.qty ? `<p class="muted">另有未出貨訂單（依訂購數量預估）：銷售額 ${money(op.sales)}，成本 ${money(op.cost)}，毛利 ${money(op.margin)}。</p>` : ''}
+    <h3>B. 訂貨量 <span class="muted">（期間內未取消的訂單 ${d.total.orders} 張）</span></h3>
+    <div class="kpis">
+      ${d.products.length ? d.products.map(p => kpi(App.esc(p.name), qtyFmt(p.orderedQty) + ' ' + App.esc(p.unit), `已出貨 ${qtyFmt(p.shippedQty)} ${App.esc(p.unit)}`)).join('') : kpi('訂貨量', '0')}
+    </div>
+    <h3>C. 未歸還 <span class="muted">（目前還在客戶那裡，不分期間）</span></h3>
+    <div class="kpis">
+      ${kpi('未歸還棧板', qtyFmt(c.pallets) + ' 板')}
+      ${kpi('未歸還籃子', qtyFmt(c.baskets) + ' 籃')}
+    </div>
+    ${c.list.length ? `<div class="table-wrap"><table class="dash-table">
+      ${row(['客戶', '廠商', '棧板', '籃子', '最後收回'], true)}
+      ${c.list.map(r => row([App.esc(r.customerName), App.esc(r.supplierName), r.pallets + ' 板', r.baskets + ' 籃', App.esc(r.lastReturn || '—')])).join('')}
+    </table></div>` : ''}
+    ${d.months.length > 1 ? `<h3>每月銷售額</h3>
+      <div class="bars">${d.months.map(m => `<div class="bar-row"><span class="num">${App.esc(m.month)}</span>
+        <span class="bar"><span style="width:${(m.sales / maxSales * 100).toFixed(1)}%"></span></span>
+        <span class="num r">${money(m.sales)}<span class="muted">　毛利 ${money(m.margin)}</span></span></div>`).join('')}</div>` : ''}
+    <h3>依客戶</h3>
+    <div class="table-wrap"><table class="dash-table">
+      ${row(['客戶', '訂貨量', '銷售額', '進貨成本', '毛利', '毛利率'], true)}
+      ${d.customers.map(r => row([App.esc(r.name), qtyFmt(r.orderedQty), money(r.sales), money(r.cost), money(r.margin), pct(r.margin, r.sales)])).join('') || row(['沒有資料', '', '', '', '', ''])}
+    </table></div>
+    <h3>依品項</h3>
+    <div class="table-wrap"><table class="dash-table">
+      ${row(['品項', '訂貨量', '已出貨', '銷售額', '進貨成本', '毛利'], true)}
+      ${d.products.map(r => row([App.esc(r.name), qtyFmt(r.orderedQty) + ' ' + App.esc(r.unit), qtyFmt(r.shippedQty) + ' ' + App.esc(r.unit), money(r.sales), money(r.cost), money(r.margin)])).join('') || row(['沒有資料', '', '', '', '', ''])}
+    </table></div>
+    <p class="muted">售價來自系統試算表的「售價」工作表（第一次打開儀表板時自動建立，每個品項一列，填「售價」即可；調價時新增一列並填生效日期）。進貨成本用訂單上的採購單價。</p>`;
 }
 
 window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });

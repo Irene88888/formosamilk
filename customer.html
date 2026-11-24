@@ -92,9 +92,9 @@ async function load() {
 async function loadPallets() {
   try {
     const d = await App.call('c_pallets');
-    const list = d.balances.filter(r => r.balance !== 0);
-    $('palletBox').innerHTML = list.length ? `<div class="banner banner-info">目前在您這裡、尚未收回的棧板：${
-      list.map(r => `${list.length > 1 ? App.esc(r.supplierName) + ' ' : ''}<strong class="num">${r.balance}</strong> 板`).join('、')}。數量有出入請聯絡我們。</div>` : '';
+    const list = d.balances.filter(r => r.balance !== 0 || r.bBalance);
+    $('palletBox').innerHTML = list.length ? `<div class="banner banner-info">目前在您這裡、尚未收回的棧板／籃子：${
+      list.map(r => `${list.length > 1 ? App.esc(r.supplierName) + ' ' : ''}<strong class="num">${r.balance}</strong> 板` + (r.bBalance ? `、<strong class="num">${r.bBalance}</strong> 籃` : '')).join('；')}。數量有出入請聯絡我們。</div>` : '';
   } catch (e) { /* 棧板資訊載入失敗不影響下單 */ }
 }
 
