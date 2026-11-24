@@ -182,3 +182,21 @@ input:disabled, select:disabled { opacity: .65; }
 .issue { border-left: 3px solid var(--pending); padding: 6px 10px; margin: 10px 0; background: var(--pending-bg); color: var(--pending); border-radius: 0 8px 8px 0; font-size: 14px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 .check input { width: auto; min-height: 0; }
+
+/* 儀表板 */
+.dash-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dash-filter input[type=date] { width: auto; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 8px 0 12px; }
+.kpi { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; background: var(--surface); min-width: 0; }
+.kpi-label { font-size: 13px; color: var(--muted); }
+.kpi-value { font-size: 24px; font-weight: 700; margin-top: 2px; overflow-wrap: anywhere; }
+.kpi-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.table-wrap { overflow-x: auto; margin: 6px 0 12px; }
+.dash-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.dash-table th, .dash-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.dash-table th { color: var(--muted); font-weight: 500; }
+.dash-table .r { text-align: right; }
+.bars { display: grid; gap: 6px; margin: 6px 0 12px; }
+.bar-row { display: grid; grid-template-columns: 70px 1fr auto; gap: 10px; align-items: center; font-size: 14px; }
+.bar { height: 10px; background: var(--done-bg); border-radius: 5px; overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--sea); border-radius: 5px; }
