@@ -713,7 +713,10 @@ function renderAccounts() {
         ${r.lineId && !custOpts.some(o => o.id === r.lineId) ? `<option value="${App.esc(r.lineId)}" selected>${App.esc(r.lineId)}</option>` : ''}
       </select>
       <label class="check"><input type="checkbox" data-f="active" ${r.active ? 'checked' : ''}> 提醒</label>
-      <button class="btn btn-sm" data-remind-save="${App.esc(r.customerCode)}">儲存</button>
+      <span class="acc-actions">
+        <button class="btn btn-sm" data-remind-save="${App.esc(r.customerCode)}">儲存</button>
+        <button class="btn btn-sm" data-remind-test="${App.esc(r.customerCode)}" ${r.email || r.lineId ? '' : 'disabled title="先填好 Email 或 LINE 並儲存"'}>測試</button>
+      </span>
     </div>`).join('') : '<p class="muted">還沒有客戶。</p>';
 }
 
@@ -764,6 +767,16 @@ $('groupRows').addEventListener('click', async e => {
 });
 
 $('remindRows').addEventListener('click', async e => {
+  const t = e.target.closest('[data-remind-test]');
+  if (t) {
+    const name = t.closest('[data-remind]').querySelector('strong').textContent;
+    if (!confirm(`發一則「測試」未下單提醒給 ${name}？\n只會發到這位客戶已儲存的 Email 和 LINE。`)) return;
+    try {
+      const d = await App.busy(t, '發送中…', () => App.call('remind_test', { customerCode: t.dataset.remindTest }));
+      App.toast('已發送：' + (d.sent.join('、') || '沒有'));
+    } catch (err) { App.toast(err.message, true); }
+    return;
+  }
   const b = e.target.closest('[data-remind-save]');
   if (!b) return;
   const row = b.closest('[data-remind]');
