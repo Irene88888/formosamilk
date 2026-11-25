@@ -178,7 +178,9 @@ input:disabled, select:disabled { opacity: .65; }
 @media (max-width: 640px) { .acc-list li { grid-template-columns: 1fr; } .acc-list .acc-actions { justify-content: flex-start; } }
 .secret { font-size: 22px; font-weight: 700; letter-spacing: .08em; font-variant-numeric: tabular-nums; margin: 4px 0 8px; user-select: all; }
 .group-row { display: grid; grid-template-columns: 160px 1fr auto; gap: 8px; align-items: center; margin-bottom: 8px; }
-@media (max-width: 640px) { .group-row { grid-template-columns: 1fr; } }
+.remind-row { display: grid; grid-template-columns: 160px minmax(160px, 1fr) minmax(200px, 1.4fr) auto auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.remind-row select, .remind-row input[type=text] { min-width: 0; }
+@media (max-width: 640px) { .group-row, .remind-row { grid-template-columns: 1fr; } }
 .issue { border-left: 3px solid var(--pending); padding: 6px 10px; margin: 10px 0; background: var(--pending-bg); color: var(--pending); border-radius: 0 8px 8px 0; font-size: 14px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 .check input { width: auto; min-height: 0; }
