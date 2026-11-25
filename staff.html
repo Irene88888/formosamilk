@@ -154,6 +154,11 @@
         <p class="muted">把 Bot 拉進廠商群組後，群組會出現在下拉選單。選好後按「儲存」，之後發單就會推播到那個群組。</p>
         <div id="groupRows"></div>
       </section>
+      <section class="panel">
+        <h2>客戶的 LINE 與 Email（未下單提醒）</h2>
+        <p class="muted">到貨日前 2 天的 11:00、14:00、17:00，還沒下單的客戶會收到提醒。客戶加官方帳號好友並傳一句話，或把 Bot 拉進客戶群組後，就會出現在下拉選單。已經設給廠商的群組不會出現在這裡。</p>
+        <div id="remindRows"></div>
+      </section>
     </div>
   </div>
 </main>
@@ -677,17 +682,42 @@ function renderAccounts() {
     </li>`).join('');
 
   const groups = A.groups;
+  const reminders = A.reminders || [], friends = A.lineUsers || [];
+  const custIds = new Set(reminders.flatMap(r => String(r.lineId || '').split(',').filter(Boolean)));
+  const supIds = new Set(A.suppliers.map(s => s.groupId).filter(Boolean));
+  const supGroups = groups.filter(g => !custIds.has(g.groupId));
   $('groupRows').innerHTML = A.suppliers.length ? A.suppliers.map(s => `
     <div class="group-row">
       <strong>${App.esc(s.name)}</strong>
       <select data-group-for="${App.esc(s.code)}" aria-label="${App.esc(s.name)} 的 LINE 群組">
         <option value="">未設定</option>
-        ${groups.map(g => `<option value="${App.esc(g.groupId)}" ${g.groupId === s.groupId ? 'selected' : ''}>${App.esc(g.time)} 偵測到（${App.esc(g.note)}）${App.esc(g.groupId.slice(0, 10))}…</option>`).join('')}
-        ${s.groupId && !groups.some(g => g.groupId === s.groupId) ? `<option value="${App.esc(s.groupId)}" selected>${App.esc(s.groupId.slice(0, 10))}…</option>` : ''}
+        ${supGroups.map(g => `<option value="${App.esc(g.groupId)}" ${g.groupId === s.groupId ? 'selected' : ''}>${App.esc(g.time)} 偵測到（${App.esc(g.note)}）${App.esc(g.groupId.slice(0, 10))}…</option>`).join('')}
+        ${s.groupId && !supGroups.some(g => g.groupId === s.groupId) ? `<option value="${App.esc(s.groupId)}" selected>${App.esc(s.groupId.slice(0, 10))}…</option>` : ''}
       </select>
       <button class="btn btn-sm" data-group-save="${App.esc(s.code)}">儲存</button>
     </div>`).join('') : '<p class="muted">還沒有廠商。新增廠商帳號時會一併建立。</p>';
   if (!groups.length) $('groupRows').insertAdjacentHTML('beforeend', '<p class="muted">還沒有偵測到任何群組。設定好 LINE Bot 後，把它拉進廠商群組，或在群組裡傳一則訊息。</p>');
+
+  // 客戶的 LINE：只列出好友和「沒有設給廠商」的群組
+  const custOpts = [
+    ...friends.map(u => ({ id: u.userId, label: `好友：${u.displayName || '（未取得名稱）'}（${u.time} 加入）${u.userId.slice(0, 10)}…` })),
+    ...groups.filter(g => !supIds.has(g.groupId)).map(g => ({ id: g.groupId, label: `群組：${g.time} 偵測到（${g.note}）${g.groupId.slice(0, 10)}…` })),
+  ];
+  $('remindRows').innerHTML = reminders.length ? reminders.map(r => `
+    <div class="remind-row" data-remind="${App.esc(r.customerCode)}">
+      <strong>${App.esc(r.customerName || r.customerCode)}</strong>
+      <input type="text" data-f="email" value="${App.esc(r.email || '')}" placeholder="Email（多人用逗號分隔）" aria-label="${App.esc(r.customerName)} 的 Email">
+      <select data-f="lineId" aria-label="${App.esc(r.customerName)} 的 LINE">
+        <option value="">不發 LINE</option>
+        ${custOpts.map(o => `<option value="${App.esc(o.id)}" ${o.id === r.lineId ? 'selected' : ''}>${App.esc(o.label)}</option>`).join('')}
+        ${r.lineId && !custOpts.some(o => o.id === r.lineId) ? `<option value="${App.esc(r.lineId)}" selected>${App.esc(r.lineId)}</option>` : ''}
+      </select>
+      <label class="check"><input type="checkbox" data-f="active" ${r.active ? 'checked' : ''}> 提醒</label>
+      <span class="acc-actions">
+        <button class="btn btn-sm" data-remind-save="${App.esc(r.customerCode)}">儲存</button>
+        <button class="btn btn-sm" data-remind-test="${App.esc(r.customerCode)}" ${r.email || r.lineId ? '' : 'disabled title="先填好 Email 或 LINE 並儲存"'}>測試</button>
+      </span>
+    </div>`).join('') : '<p class="muted">還沒有客戶。</p>';
 }
 
 $('accList').addEventListener('click', async e => {
@@ -733,6 +763,29 @@ $('groupRows').addEventListener('click', async e => {
     S.suppliers = d.list.suppliers.map(s => ({ code: s.code, name: s.name, hasGroup: !!s.groupId }));
     renderAccounts();
     App.toast('已儲存');
+  } catch (err) { App.toast(err.message, true); }
+});
+
+$('remindRows').addEventListener('click', async e => {
+  const t = e.target.closest('[data-remind-test]');
+  if (t) {
+    const name = t.closest('[data-remind]').querySelector('strong').textContent;
+    if (!confirm(`發一則「測試」未下單提醒給 ${name}？\n只會發到這位客戶已儲存的 Email 和 LINE。`)) return;
+    try {
+      const d = await App.busy(t, '發送中…', () => App.call('remind_test', { customerCode: t.dataset.remindTest }));
+      App.toast('已發送：' + (d.sent.join('、') || '沒有'));
+    } catch (err) { App.toast(err.message, true); }
+    return;
+  }
+  const b = e.target.closest('[data-remind-save]');
+  if (!b) return;
+  const row = b.closest('[data-remind]');
+  const f = k => row.querySelector(`[data-f="${k}"]`);
+  try {
+    const d = await App.busy(b, '儲存中…', () => App.call('remind_set', {
+      customerCode: row.dataset.remind, email: f('email').value.trim(), lineId: f('lineId').value, active: f('active').checked,
+    }));
+    S.acc = d.list; renderAccounts(); App.toast('已儲存');
   } catch (err) { App.toast(err.message, true); }
 });
 
